@@ -1,23 +1,20 @@
 services:
   kasm-tool:
     image: www527/gemini-kasm:1.0
-    container_name: kasm-browser
+    container_name: gemini-kasm
     shm_size: 512m
-    # 添加 user: "0:0" 有时能解决启动时的复制权限问题，
-    # 但 Kasm 官方推荐使用环境变量控制。
-    # 我们坚持使用上面的 chown 方法是最稳妥的。
     ports:
-      - "6901:6901"    # Kasm 桌面
-      - "8000:8000"    # 你的 Python API 端口 (别忘了映射这个！)
+      - "6901:6901"
+      - "8000:8000"
     environment:
       - VNC_PW=password
       - VNC_USER=kasm_user
-      - APP_ARGS=--no-sandbox  # 有时 Chrome 需要这个参数
+      - APP_ARGS=--no-sandbox
     volumes:
-      # 挂载 Chrome 配置目录 (确保你执行了上面的 chown)
+      # 挂载 Chrome 配置目录
       - ./kasm_profile:/home/kasm-user/.config
-      # 建议：同时也挂载你的代码目录，方便修改代码不用重做镜像
-#      - .:/gemini
+      - ./conversations:/gemini/conversations
+      - ./stored_images:/gemini/stored_images
     networks:
       - gemini-net
     restart: unless-stopped
