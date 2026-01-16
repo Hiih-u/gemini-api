@@ -17,11 +17,14 @@ from gemini_webapi import GeminiClient
 from gemini_webapi.constants import Model
 from pydantic import BaseModel
 
+try:
+    import browser_cookie3
+except ImportError:
+    browser_cookie3 = None
+
 load_dotenv()
 
 # 配置
-Secure_1PSID = os.getenv("SECURE_1PSID")
-Secure_1PSIDTS = os.getenv("SECURE_1PSIDTS")
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", 8000))
 IMAGES_BASE_DIR = Path(os.getenv("IMAGES_DIR", "stored_images"))
@@ -65,23 +68,71 @@ def debug_log(message: str, level: str = "INFO"):
         print(f"[{timestamp}] {emoji} {message}")
 
 
+def get_auto_cookies():
+    """尝试从浏览器自动获取 Gemini Cookie"""
+    if not browser_cookie3:
+        debug_log("未安装 browser_cookie3，跳过自动获取", "WARNING")
+        return None, None
+
+    debug_log("正在尝试从 Kasm Chrome 自动获取 Cookie...", "INFO")
+    try:
+        # 这里对应你刚才测试成功的代码
+        cj = browser_cookie3.chrome(domain_name='.google.com')
+        psid = None
+        ts = None
+
+        for cookie in cj:
+            if cookie.name == '__Secure-1PSID':
+                psid = cookie.value
+            if cookie.name == '__Secure-1PSIDTS':
+                ts = cookie.value
+
+        if psid and ts:
+            debug_log(f"✅ 自动获取成功! TS: {ts[:10]}...", "SUCCESS")
+            return psid, ts
+        else:
+            debug_log("❌ 浏览器数据库读取成功，但未找到 Gemini Cookie (请确认已登录)", "WARNING")
+            return None, None
+    except Exception as e:
+        debug_log(f"❌ 自动获取失败: {e}", "ERROR")
+        return None, None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global gemini_client
+
+    # 1. 优先从环境变量读取
+    secure_1psid = os.getenv("SECURE_1PSID")
+    secure_1psidts = os.getenv("SECURE_1PSIDTS")
+
+    # 2. 如果环境变量缺失，尝试自动获取
+    if not secure_1psid or not secure_1psidts:
+        debug_log("环境变量未配置 Cookie，尝试自动获取...", "INFO")
+        auto_psid, auto_ts = get_auto_cookies()
+        if auto_psid and auto_ts:
+            secure_1psid = auto_psid
+            secure_1psidts = auto_ts
+
     debug_log("开始初始化 Gemini 客户端...", "INFO")
     try:
-        gemini_client = GeminiClient(Secure_1PSID, Secure_1PSIDTS)
+        # 使用最终获取到的 Cookie 初始化
+        if not secure_1psid or not secure_1psidts:
+            raise ValueError("无法获取有效的 Cookie (环境变量为空且自动获取失败)")
+
+        gemini_client = GeminiClient(secure_1psid, secure_1psidts)
         await gemini_client.init(auto_refresh=True)
         debug_log("Gemini 客户端初始化成功", "SUCCESS")
+
+        # 打印目录信息
         debug_log(f"图片存储目录: {IMAGES_BASE_DIR.absolute()}", "INFO")
         debug_log(f"对话历史目录: {CONVERSATIONS_DIR.absolute()}", "INFO")
-        debug_log(f"上传文件目录: {UPLOADS_DIR.absolute()}", "INFO")
-        debug_log(f"静态文件目录: {STATIC_DIR.absolute()}", "INFO")
+
     except Exception as e:
         debug_log(f"初始化失败: {e}", "ERROR")
-        raise
+        # 这里不 raise，防止整个服务起不来，可以在调用接口时再报错
+        # raise
     yield
-
 
 app = FastAPI(lifespan=lifespan, title="Gemini Chat API", version="1.0.0")
 
