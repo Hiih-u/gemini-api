@@ -1,9 +1,3 @@
-这是一个为你定制的 `README.md`。它整合了我们之前讨论的所有关键点：**Kasm 镜像构建、权限管理、Cookie 自动获取以及服务启动流程**。
-
-请将以下内容保存为项目根目录下的 `README.md`。
-
----
-
 # Gemini Chat (Kasm Docker Edition)
 
 这是一个基于 **FastAPI** 和 **Kasm Workspaces** 构建的 Gemini AI 聊天服务。
