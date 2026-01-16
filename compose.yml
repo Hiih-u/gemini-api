@@ -13,8 +13,9 @@ services:
     volumes:
       # 挂载 Chrome 配置目录
       - ./kasm_profile:/home/kasm-user/.config
-      - ./conversations:/gemini/conversations
-      - ./stored_images:/gemini/stored_images
+#      - ./conversations:/gemini/conversations
+#      - ./stored_images:/gemini/stored_images
+      - .:/gemini
     networks:
       - gemini-net
     restart: unless-stopped
