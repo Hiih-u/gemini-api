@@ -40,7 +40,7 @@ sudo chown -R 1000:1000 .
 使用提供的 `Dockerfile` 构建定制镜像（包含 Python 3.10 和依赖补丁）：
 
 ```bash
-docker build -t www527/gemini-kasm:1.0 .
+docker build -t gemini-kasm:1.0 .
 
 ```
 
