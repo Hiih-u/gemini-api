@@ -210,10 +210,12 @@ async def chat_completions(request: ChatRequest, req: Request):
                     debug_log("从文件恢复对话", "CHAT")
 
         if chat is None:
-            conversation_id = str(uuid.uuid4())
+            if not conversation_id:
+                conversation_id = str(uuid.uuid4())
+
             chat = gemini_client.start_chat(model=model)
             active_chats[conversation_id] = chat
-            debug_log(f"创建新对话: {conversation_id}", "CHAT")
+            debug_log(f"初始化新会话: {conversation_id}", "CHAT")
 
         # 发送消息（官方 API 自动处理文件）
         debug_log("正在发送消息到 Gemini...", "REQUEST")
