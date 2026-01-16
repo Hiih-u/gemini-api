@@ -29,6 +29,8 @@ COPY requirements_linux.txt .
 # 务必指定使用 python3.10 运行 pip
 RUN python3.10 -m pip install --no-cache-dir -r requirements_linux.txt
 
+RUN chmod -R 777 /usr/local/lib/python3.10/dist-packages/gemini_webapi
+
 # =======================================================
 # 6. 关键步骤：自动给 gemini_webapi 打补丁适配 Python 3.10
 # =======================================================

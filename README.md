@@ -86,7 +86,7 @@ docker compose up -d
 2. 执行以下命令启动服务（注意必须加载 D-Bus）：
 
 ```bash
-# 1. 进入项目目录
+# 1. 进入容器内部目录
 cd /gemini
 
 # 2. 加载 D-Bus 环境变量 (用于读取加密的 Cookie)
