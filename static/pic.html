@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gemini Chat - AI 对话助手</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .message-enter {
+            animation: fadeIn 0.3s ease-out;
+        }
+        .typing-indicator span {
+            animation: blink 1.4s infinite;
+        }
+        .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+        .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes blink {
+            0%, 60%, 100% { opacity: 0.3; }
+            30% { opacity: 1; }
+        }
+        .markdown-body img {
+            max-width: 100%;
+            border-radius: 0.5rem;
+            margin: 1rem 0;
+        }
+        .markdown-body pre {
+            background: #1f2937;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            overflow-x: auto;
+        }
+        .markdown-body code {
+            background: #374151;
+            padding: 0.2rem 0.4rem;
+            border-radius: 0.25rem;
+            font-size: 0.875rem;
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen">
+    <div class="container mx-auto max-w-6xl h-screen flex flex-col p-4">
+
+        <!-- Header -->
+        <header class="bg-white rounded-t-2xl shadow-lg p-4 flex items-center justify-between">
+            <div class="flex items-center space-x-3">
+                <div class="w-10 h-10 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-full flex items-center justify-center">
+                    <i class="fas fa-robot text-white text-xl"></i>
+                </div>
+                <div>
+                    <h1 class="text-xl font-bold text-gray-800">Gemini Chat</h1>
+                    <p class="text-xs text-gray-500">AI 对话助手 - 单对话模式</p>
+                </div>
+            </div>
+
+            <div class="flex items-center space-x-2">
+                <!-- 模型选择 -->
+                <select id="modelSelect" class="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                    <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+                    <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+                    <option value="gemini-3.0-pro">Gemini 3.0 Pro</option>
+                    <option value="default">Default</option>
+                </select>
+
+                <!-- 并发数量 -->
+                <select id="concurrentCount" class="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                    <option value="1">单次</option>
+                    <option value="3" selected>并发 3 次</option>
+                    <option value="5">并发 5 次</option>
+                </select>
+
+                <!-- 清空对话 -->
+                <button onclick="clearChat()" class="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition text-sm">
+                    <i class="fas fa-trash mr-1"></i> 清空
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <div class="flex-1 flex bg-white shadow-lg overflow-hidden">
+            <!-- Chat Area -->
+            <div class="flex-1 flex flex-col">
+                <!-- Messages -->
+                <div id="messagesContainer" class="flex-1 overflow-y-auto p-6 space-y-4">
+                    <!-- Welcome Message -->
+                    <div class="text-center py-12 text-gray-400">
+                        <i class="fas fa-comments text-6xl mb-4"></i>
+                        <p class="text-lg">开始你的 AI 对话之旅</p>
+                        <p class="text-sm mt-2">支持文本、图片、文件上传</p>
+                        <p class="text-xs mt-2 text-blue-500">💡 可选择并发次数，获取多个不同的回答</p>
+                    </div>
+                </div>
+
+                <!-- Input Area -->
+                <div class="border-t border-gray-200 p-4 bg-gray-50">
+                    <!-- File Preview -->
+                    <div id="filePreview" class="mb-3 hidden">
+                        <div class="flex flex-wrap gap-2" id="fileList"></div>
+                    </div>
+
+                    <div class="flex items-end space-x-2">
+                        <!-- File Upload -->
+                        <label class="cursor-pointer px-3 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition">
+                            <i class="fas fa-paperclip"></i>
+                            <input type="file" id="fileInput" multiple class="hidden" onchange="handleFileSelect(event)">
+                        </label>
+
+                        <!-- Text Input -->
+                        <textarea
+                            id="messageInput"
+                            placeholder="输入消息... (Shift+Enter 换行，Enter 发送)"
+                            class="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                            rows="1"
+                            onkeydown="handleKeyPress(event)"
+                        ></textarea>
+
+                        <!-- Send Button -->
+                        <button
+                            onclick="sendMessage()"
+                            id="sendButton"
+                            class="px-6 py-3 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-lg hover:from-blue-600 hover:to-indigo-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            <i class="fas fa-paper-plane"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <footer class="bg-white rounded-b-2xl shadow-lg p-3 text-center text-xs text-gray-500">
+            <p>Powered by <span class="font-semibold text-blue-600">Gemini API</span> |
+            <span id="statusIndicator" class="inline-flex items-center">
+                <span class="w-2 h-2 bg-green-500 rounded-full mr-1"></span> 在线
+            </span>
+            </p>
+        </footer>
+    </div>
+
+    <script>
+        // 全局变量
+        let conversationId = null;
+        const API_BASE = window.location.origin;
+
+        // 初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            checkHealth();
+            autoResizeTextarea();
+        });
+
+        // 健康检查
+        async function checkHealth() {
+            try {
+                const response = await fetch(`${API_BASE}/health`);
+                const data = await response.json();
+                document.getElementById('statusIndicator').innerHTML = `
+                    <span class="w-2 h-2 bg-green-500 rounded-full mr-1"></span> 在线
+                `;
+            } catch (error) {
+                document.getElementById('statusIndicator').innerHTML = `
+                    <span class="w-2 h-2 bg-red-500 rounded-full mr-1"></span> 离线
+                `;
+            }
+        }
+
+        // 自动调整文本框高度
+        function autoResizeTextarea() {
+            const textarea = document.getElementById('messageInput');
+            textarea.addEventListener('input', function() {
+                this.style.height = 'auto';
+                this.style.height = Math.min(this.scrollHeight, 200) + 'px';
+            });
+        }
+
+        // 处理键盘事件
+        function handleKeyPress(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+            }
+        }
+
+        // 文件选择
+        function handleFileSelect(event) {
+            const files = Array.from(event.target.files);
+            const preview = document.getElementById('filePreview');
+            const fileList = document.getElementById('fileList');
+
+            if (files.length > 0) {
+                preview.classList.remove('hidden');
+                fileList.innerHTML = files.map((file, index) => `
+                    <div class="flex items-center space-x-2 bg-white px-3 py-2 rounded-lg border border-gray-300">
+                        <i class="fas fa-file text-blue-500"></i>
+                        <span class="text-sm text-gray-700">${file.name}</span>
+                        <button onclick="removeFile(${index})" class="text-red-500 hover:text-red-700">
+                            <i class="fas fa-times text-xs"></i>
+                        </button>
+                    </div>
+                `).join('');
+            }
+        }
+
+        // 移除文件
+        function removeFile(index) {
+            const input = document.getElementById('fileInput');
+            const dt = new DataTransfer();
+            const files = Array.from(input.files);
+
+            files.splice(index, 1);
+            files.forEach(file => dt.items.add(file));
+            input.files = dt.files;
+
+            if (files.length === 0) {
+                document.getElementById('filePreview').classList.add('hidden');
+            } else {
+                handleFileSelect({ target: input });
+            }
+        }
+
+        // 发送消息
+        async function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+            const fileInput = document.getElementById('fileInput');
+            const files = fileInput.files;
+
+            if (!message && files.length === 0) return;
+
+            // 禁用发送按钮
+            const sendButton = document.getElementById('sendButton');
+            sendButton.disabled = true;
+
+            // 显示用户消息
+            if (message) {
+                addMessage('user', message);
+            }
+
+            // 上传文件
+            let filePaths = [];
+            if (files.length > 0) {
+                try {
+                    const formData = new FormData();
+                    Array.from(files).forEach(file => formData.append('files', file));
+
+                    const uploadResponse = await fetch(`${API_BASE}/upload`, {
+                        method: 'POST',
+                        body: formData
+                    });
+                    const uploadData = await uploadResponse.json();
+                    filePaths = uploadData.files;
+
+                    addMessage('system', `✅ 已上传 ${files.length} 个文件`);
+                } catch (error) {
+                    addMessage('error', '❌ 文件上传失败: ' + error.message);
+                    sendButton.disabled = false;
+                    return;
+                }
+            }
+
+            // 清空输入
+            input.value = '';
+            input.style.height = 'auto';
+            fileInput.value = '';
+            document.getElementById('filePreview').classList.add('hidden');
+
+            // 获取并发数量
+            const requestCount = parseInt(document.getElementById('concurrentCount').value);
+
+            if (requestCount > 1) {
+                addMessage('system', `🚀 并发发送 ${requestCount} 次请求，获取多样化回答...`);
+            }
+
+            // 创建加载占位符
+            const loadingIds = [];
+            for (let i = 0; i < requestCount; i++) {
+                const loadingId = addMessage('assistant',
+                    `<div class="typing-indicator"><span>●</span><span>●</span><span>●</span></div>
+                    <span class="text-xs text-gray-500">正在生成第 ${i + 1} 个回答...</span>`,
+                    true
+                );
+                loadingIds.push(loadingId);
+            }
+
+            // 并发发送请求
+            const promises = Array(requestCount).fill(null).map((_, index) =>
+                fetch(`${API_BASE}/v1/chat/completions`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        model: document.getElementById('modelSelect').value,
+                        messages: [{ role: 'user', content: message || '分析上传的文件' }],
+                        conversation_id: conversationId,
+                        files: filePaths.length > 0 ? filePaths : null
+                    })
+                }).then(res => res.json()).then(data => ({ index, data })).catch(error => ({ index, error }))
+            );
+
+            // 依次显示结果
+            try {
+                const results = await Promise.all(promises);
+
+                results.forEach(({ index, data, error }) => {
+                    // 移除对应的加载动画
+                    const loadingElement = document.getElementById(loadingIds[index]);
+                    if (loadingElement) loadingElement.remove();
+
+                    if (error) {
+                        addMessage('error', `❌ 第 ${index + 1} 次请求失败: ${error.message}`);
+                    } else {
+                        // 显示回复
+                        addMessage('assistant', `**[回答 ${index + 1}/${requestCount}]**\n\n${data.choices[0].message.content}`);
+
+                        // 保存对话 ID（所有请求使用同一个 ID）
+                        if (!conversationId) {
+                            conversationId = data.conversation_id;
+                        }
+                    }
+                });
+
+                if (requestCount > 1) {
+                    addMessage('system', `✅ 已完成 ${requestCount} 次并发请求`);
+                }
+
+            } catch (error) {
+                // 清理所有加载动画
+                loadingIds.forEach(id => {
+                    const element = document.getElementById(id);
+                    if (element) element.remove();
+                });
+                addMessage('error', '❌ 请求失败: ' + error.message);
+            }
+
+            // 启用发送按钮
+            sendButton.disabled = false;
+            input.focus();
+        }
+
+        // 添加消息
+        function addMessage(role, content, isLoading = false) {
+            const container = document.getElementById('messagesContainer');
+            const messageId = 'msg-' + Date.now() + '-' + Math.random();
+
+            // 移除欢迎消息
+            const welcome = container.querySelector('.text-center');
+            if (welcome) welcome.remove();
+
+            const messageDiv = document.createElement('div');
+            messageDiv.id = messageId;
+            messageDiv.className = 'message-enter flex items-start space-x-3';
+
+            let bgColor, icon, textColor;
+            if (role === 'user') {
+                bgColor = 'bg-blue-500 text-white ml-auto';
+                icon = '<i class="fas fa-user"></i>';
+                textColor = 'text-white';
+            } else if (role === 'assistant') {
+                bgColor = 'bg-gray-100 text-gray-800';
+                icon = '<i class="fas fa-robot"></i>';
+                textColor = 'text-gray-800';
+            } else if (role === 'system') {
+                bgColor = 'bg-yellow-100 text-yellow-800';
+                icon = '<i class="fas fa-info-circle"></i>';
+                textColor = 'text-yellow-800';
+            } else {
+                bgColor = 'bg-red-100 text-red-800';
+                icon = '<i class="fas fa-exclamation-triangle"></i>';
+                textColor = 'text-red-800';
+            }
+
+            messageDiv.innerHTML = `
+                <div class="w-8 h-8 rounded-full ${role === 'user' ? 'bg-blue-600' : 'bg-gray-300'} flex items-center justify-center flex-shrink-0">
+                    ${icon}
+                </div>
+                <div class="flex-1 ${role === 'user' ? 'text-right' : ''}">
+                    <div class="inline-block ${bgColor} rounded-2xl px-4 py-3 max-w-3xl">
+                        <div class="markdown-body ${textColor} text-sm">
+                            ${isLoading ? content : marked.parse(content)}
+                        </div>
+                    </div>
+                    <div class="text-xs text-gray-400 mt-1 ${role === 'user' ? 'text-right' : ''}">
+                        ${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
+                    </div>
+                </div>
+            `;
+
+            container.appendChild(messageDiv);
+            container.scrollTop = container.scrollHeight;
+
+            return messageId;
+        }
+
+        // 清空对话
+        function clearChat() {
+            if (!confirm('确定要清空当前对话吗？')) return;
+
+            conversationId = null;
+            document.getElementById('messagesContainer').innerHTML = `
+                <div class="text-center py-12 text-gray-400">
+                    <i class="fas fa-comments text-6xl mb-4"></i>
+                    <p class="text-lg">开始你的 AI 对话之旅</p>
+                    <p class="text-sm mt-2">支持文本、图片、文件上传</p>
+                    <p class="text-xs mt-2 text-blue-500">💡 可选择并发次数，获取多个不同的回答</p>
+                </div>
+            `;
+            document.getElementById('messageInput').focus();
+        }
+    </script>
+</body>
+</html>

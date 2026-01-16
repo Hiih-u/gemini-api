@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gemini Chat - assistant-ui</title>
+
+  <!-- React -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+  <!-- Babel -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Marked.js for Markdown -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+  <style>
+      * {
+          margin: 0;
+          padding: 0;
+          box-sizing: border-box;
+      }
+
+      body, html {
+          height: 100%;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      }
+
+      #root {
+          height: 100vh;
+          display: flex;
+          flex-direction: column;
+      }
+
+      /* 消息动画 */
+      @keyframes slideIn {
+          from {
+              opacity: 0;
+              transform: translateY(10px);
+          }
+          to {
+              opacity: 1;
+              transform: translateY(0);
+          }
+      }
+
+      .message {
+          animation: slideIn 0.3s ease-out;
+      }
+
+      /* 打字动画 */
+      @keyframes typing {
+          0%, 100% { opacity: 0.3; }
+          50% { opacity: 1; }
+      }
+
+      .typing-indicator span {
+          animation: typing 1.4s infinite;
+      }
+
+      .typing-indicator span:nth-child(2) {
+          animation-delay: 0.2s;
+      }
+
+      .typing-indicator span:nth-child(3) {
+          animation-delay: 0.4s;
+      }
+
+      /* Markdown 样式 */
+      .markdown-body {
+          line-height: 1.6;
+      }
+
+      .markdown-body pre {
+          background: #1f2937;
+          color: #f9fafb;
+          padding: 1rem;
+          border-radius: 0.5rem;
+          overflow-x: auto;
+          margin: 0.5rem 0;
+      }
+
+      .markdown-body code {
+          background: #374151;
+          padding: 0.2rem 0.4rem;
+          border-radius: 0.25rem;
+          font-size: 0.875rem;
+      }
+
+      .markdown-body pre code {
+          background: none;
+          padding: 0;
+      }
+
+      .markdown-body p {
+          margin: 0.5rem 0;
+      }
+
+      .markdown-body ul, .markdown-body ol {
+          margin: 0.5rem 0;
+          padding-left: 1.5rem;
+      }
+
+      .markdown-body h1, .markdown-body h2, .markdown-body h3 {
+          margin-top: 1rem;
+          margin-bottom: 0.5rem;
+      }
+
+      /* 滚动条 */
+      ::-webkit-scrollbar {
+          width: 8px;
+      }
+
+      ::-webkit-scrollbar-track {
+          background: #f1f1f1;
+      }
+
+      ::-webkit-scrollbar-thumb {
+          background: #888;
+          border-radius: 4px;
+      }
+
+      ::-webkit-scrollbar-thumb:hover {
+          background: #555;
+      }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+      const { useState, useEffect, useRef } = React;
+      const API_BASE = window.location.origin;
+
+      function App() {
+          const [messages, setMessages] = useState([
+              {
+                  id: '1',
+                  role: 'assistant',
+                  content: '👋 你好！我是 Gemini AI 助手。\n\n我可以帮你：\n- 💬 回答问题\n- 📄 分析文档\n- 🖼️ 处理图片\n- 💡 提供创意建议\n\n有什么可以帮助你的吗？',
+                  timestamp: new Date()
+              }
+          ]);
+
+          const [input, setInput] = useState('');
+          const [isLoading, setIsLoading] = useState(false);
+          const [selectedModel, setSelectedModel] = useState('gemini-3.0-pro');
+          const [conversationId, setConversationId] = useState(null);
+          const [files, setFiles] = useState([]);
+          const [status, setStatus] = useState('在线');
+
+          const messagesEndRef = useRef(null);
+          const fileInputRef = useRef(null);
+
+          // 自动滚动
+          useEffect(() => {
+              messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+          }, [messages]);
+
+          // 健康检查
+          useEffect(() => {
+              checkHealth();
+              const interval = setInterval(checkHealth, 30000);
+              return () => clearInterval(interval);
+          }, []);
+
+          const checkHealth = async () => {
+              try {
+                  const res = await fetch(`${API_BASE}/health`);
+                  const data = await res.json();
+                  setStatus(`在线 (${data.conversations?.total || 0} 个对话)`);
+              } catch {
+                  setStatus('离线');
+              }
+          };
+
+          // 发送消息
+          const handleSend = async () => {
+              if (!input.trim() && files.length === 0) return;
+
+              const userMessage = {
+                  id: Date.now().toString(),
+                  role: 'user',
+                  content: input,
+                  timestamp: new Date()
+              };
+
+              setMessages(prev => [...prev, userMessage]);
+              setInput('');
+              setIsLoading(true);
+
+              // 上传文件
+              let filePaths = [];
+              if (files.length > 0) {
+                  try {
+                      const formData = new FormData();
+                      files.forEach(f => formData.append('files', f));
+
+                      const res = await fetch(`${API_BASE}/upload`, {
+                          method: 'POST',
+                          body: formData
+                      });
+
+                      if (!res.ok) throw new Error('上传失败');
+
+                      const data = await res.json();
+                      filePaths = data.files;
+
+                      setMessages(prev => [...prev, {
+                          id: Date.now().toString(),
+                          role: 'system',
+                          content: `✅ 已上传 ${files.length} 个文件`,
+                          timestamp: new Date()
+                      }]);
+                  } catch (err) {
+                      setMessages(prev => [...prev, {
+                          id: Date.now().toString(),
+                          role: 'error',
+                          content: '❌ 文件上传失败: ' + err.message,
+                          timestamp: new Date()
+                      }]);
+                      setIsLoading(false);
+                      return;
+                  }
+              }
+
+              setFiles([]);
+
+              try {
+                  const res = await fetch(`${API_BASE}/v1/chat/completions`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                          model: selectedModel,
+                          messages: [{ role: 'user', content: input || '分析文件' }],
+                          conversation_id: conversationId,
+                          files: filePaths.length > 0 ? filePaths : null
+                      })
+                  });
+
+                  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+                  const data = await res.json();
+
+                  setMessages(prev => [...prev, {
+                      id: Date.now().toString(),
+                      role: 'assistant',
+                      content: data.choices[0].message.content,
+                      timestamp: new Date()
+                  }]);
+
+                  setConversationId(data.conversation_id);
+              } catch (err) {
+                  setMessages(prev => [...prev, {
+                      id: Date.now().toString(),
+                      role: 'error',
+                      content: '❌ 请求失败: ' + err.message,
+                      timestamp: new Date()
+                  }]);
+              }
+
+              setIsLoading(false);
+          };
+
+          // 新对话
+          const handleNewChat = () => {
+              setConversationId(null);
+              setFiles([]);
+              setMessages([{
+                  id: '1',
+                  role: 'assistant',
+                  content: '👋 开始新对话！有什么可以帮助你的吗？',
+                  timestamp: new Date()
+              }]);
+          };
+
+          // 文件处理
+          const handleFileSelect = (e) => {
+              const newFiles = Array.from(e.target.files);
+              setFiles(prev => [...prev, ...newFiles]);
+          };
+
+          const removeFile = (index) => {
+              setFiles(prev => prev.filter((_, i) => i !== index));
+          };
+
+          // 键盘事件
+          const handleKeyPress = (e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend();
+              }
+          };
+
+          return (
+              <div className="h-screen flex flex-col bg-gray-50">
+                  {/* Header */}
+                  <header className="bg-gradient-to-r from-blue-600 to-purple-600 text-white shadow-lg">
+                      <div className="px-6 py-4 flex items-center justify-between">
+                          <div className="flex items-center space-x-3">
+                              <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center">
+                                  🤖
+                              </div>
+                              <div>
+                                  <h1 className="text-lg font-bold">Gemini Chat</h1>
+                                  <p className="text-xs opacity-90">{status}</p>
+                              </div>
+                          </div>
+
+                          <div className="flex items-center space-x-2">
+                              <select
+                                  value={selectedModel}
+                                  onChange={(e) => setSelectedModel(e.target.value)}
+                                  className="px-3 py-2 rounded-lg text-sm bg-white/20 border-0 text-white cursor-pointer"
+                              >
+                                  <option value="gemini-2.5-flash">⚡ gemini-2.5-flash</option>
+                                  <option value="gemini-2.5-pro">🚀 gemini-2.5-pro</option>
+                                  <option value="gemini-3.0-pro">💎 gemini-3.0-pro</option>
+                              </select>
+
+                              <button
+                                  onClick={handleNewChat}
+                                  className="px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg text-sm transition"
+                              >
+                                  ➕ 新对话
+                              </button>
+                          </div>
+                      </div>
+                  </header>
+
+                  {/* Messages */}
+                  <div className="flex-1 overflow-y-auto p-6 space-y-4">
+                      {messages.map(msg => (
+                          <div
+                              key={msg.id}
+                              className={`message flex items-start space-x-3 ${
+                                  msg.role === 'user' ? 'flex-row-reverse space-x-reverse' : ''
+                              }`}
+                          >
+                              <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
+                                  msg.role === 'user' ? 'bg-blue-600 text-white' :
+                                  msg.role === 'error' ? 'bg-red-500 text-white' :
+                                  msg.role === 'system' ? 'bg-yellow-500 text-white' :
+                                  'bg-gray-300 text-gray-700'
+                              }`}>
+                                  {msg.role === 'user' ? '👤' :
+                                   msg.role === 'error' ? '⚠️' :
+                                   msg.role === 'system' ? 'ℹ️' : '🤖'}
+                              </div>
+
+                              <div className="flex-1 max-w-3xl">
+                                  <div className={`inline-block rounded-2xl px-4 py-3 ${
+                                      msg.role === 'user' ? 'bg-blue-600 text-white' :
+                                      msg.role === 'error' ? 'bg-red-100 text-red-800' :
+                                      msg.role === 'system' ? 'bg-yellow-100 text-yellow-800' :
+                                      'bg-white text-gray-800 shadow'
+                                  }`}>
+                                      <div
+                                          className="markdown-body text-sm"
+                                          dangerouslySetInnerHTML={{
+                                              __html: marked.parse(msg.content)
+                                          }}
+                                      />
+                                  </div>
+                                  <div className="text-xs text-gray-400 mt-1">
+                                      {msg.timestamp.toLocaleTimeString('zh-CN', {
+                                          hour: '2-digit',
+                                          minute: '2-digit'
+                                      })}
+                                  </div>
+                              </div>
+                          </div>
+                      ))}
+
+                      {isLoading && (
+                          <div className="message flex items-start space-x-3">
+                              <div className="w-8 h-8 rounded-full bg-gray-300 flex items-center justify-center">
+                                  🤖
+                              </div>
+                              <div className="bg-white rounded-2xl px-4 py-3 shadow">
+                                  <div className="typing-indicator flex space-x-1">
+                                      <span className="w-2 h-2 bg-gray-400 rounded-full"></span>
+                                      <span className="w-2 h-2 bg-gray-400 rounded-full"></span>
+                                      <span className="w-2 h-2 bg-gray-400 rounded-full"></span>
+                                  </div>
+                              </div>
+                          </div>
+                      )}
+
+                      <div ref={messagesEndRef} />
+                  </div>
+
+                  {/* File Preview */}
+                  {files.length > 0 && (
+                      <div className="bg-yellow-50 border-t border-yellow-200 px-6 py-3">
+                          <div className="flex flex-wrap gap-2">
+                              {files.map((file, i) => (
+                                  <div key={i} className="flex items-center space-x-2 bg-white px-3 py-2 rounded-lg border border-yellow-300">
+                                      <span className="text-sm">📄 {file.name}</span>
+                                      <button
+                                          onClick={() => removeFile(i)}
+                                          className="text-red-500 hover:text-red-700"
+                                      >
+                                          ✕
+                                      </button>
+                                  </div>
+                              ))}
+                          </div>
+                      </div>
+                  )}
+
+                  {/* Input */}
+                  <div className="bg-white border-t border-gray-200 p-4">
+                      <div className="flex items-end space-x-2 max-w-4xl mx-auto">
+                          <label className="cursor-pointer p-3 hover:bg-gray-100 rounded-lg transition">
+                              📎
+                              <input
+                                  ref={fileInputRef}
+                                  type="file"
+                                  multiple
+                                  className="hidden"
+                                  onChange={handleFileSelect}
+                              />
+                          </label>
+
+                          <textarea
+                              value={input}
+                              onChange={(e) => setInput(e.target.value)}
+                              onKeyDown={handleKeyPress}
+                              placeholder="输入消息... (Shift+Enter 换行)"
+                              className="flex-1 px-4 py-3 border border-gray-300 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+                              rows="1"
+                              style={{
+                                  minHeight: '48px',
+                                  maxHeight: '150px'
+                              }}
+                          />
+
+                          <button
+                              onClick={handleSend}
+                              disabled={isLoading || (!input.trim() && files.length === 0)}
+                              className="px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-lg hover:from-blue-700 hover:to-purple-700 transition disabled:opacity-50"
+                          >
+                              📤
+                          </button>
+                      </div>
+                  </div>
+              </div>
+          );
+      }
+
+      const root = ReactDOM.createRoot(document.getElementById('root'));
+      root.render(<App />);
+  </script>
+</body>
+</html>

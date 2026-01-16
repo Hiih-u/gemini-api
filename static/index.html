@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gemini Chat - AI 对话助手</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .message-enter {
+            animation: fadeIn 0.3s ease-out;
+        }
+        .typing-indicator span {
+            animation: blink 1.4s infinite;
+        }
+        .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+        .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes blink {
+            0%, 60%, 100% { opacity: 0.3; }
+            30% { opacity: 1; }
+        }
+        .markdown-body img {
+            max-width: 100%;
+            border-radius: 0.5rem;
+            margin: 1rem 0;
+        }
+        .markdown-body pre {
+            background: #1f2937;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            overflow-x: auto;
+        }
+        .markdown-body code {
+            background: #374151;
+            padding: 0.2rem 0.4rem;
+            border-radius: 0.25rem;
+            font-size: 0.875rem;
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen">
+    <div class="container mx-auto max-w-6xl h-screen flex flex-col p-4">
+
+        <!-- Header -->
+        <header class="bg-white rounded-t-2xl shadow-lg p-4 flex items-center justify-between">
+            <div class="flex items-center space-x-3">
+                <div class="w-10 h-10 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-full flex items-center justify-center">
+                    <i class="fas fa-robot text-white text-xl"></i>
+                </div>
+                <div>
+                    <h1 class="text-xl font-bold text-gray-800">Gemini Chat</h1>
+                    <p class="text-xs text-gray-500">AI 对话助手</p>
+                </div>
+            </div>
+
+            <div class="flex items-center space-x-2">
+                <!-- 模型选择 -->
+                <select id="modelSelect" class="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                    <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+                    <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+                    <option value="gemini-3.0-pro">Gemini 3.0 Pro</option>
+                    <option value="default">Default</option>
+                </select>
+
+                <!-- 新对话 -->
+                <button onclick="newChat()" class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition text-sm">
+                    <i class="fas fa-plus mr-1"></i> 新对话
+                </button>
+
+                <!-- 对话历史 -->
+                <button onclick="toggleHistory()" class="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition text-sm">
+                    <i class="fas fa-history mr-1"></i> 历史
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <div class="flex-1 flex bg-white shadow-lg overflow-hidden">
+
+            <!-- Chat Area -->
+            <div class="flex-1 flex flex-col">
+                <!-- Messages -->
+                <div id="messagesContainer" class="flex-1 overflow-y-auto p-6 space-y-4">
+                    <!-- Welcome Message -->
+                    <div class="text-center py-12 text-gray-400">
+                        <i class="fas fa-comments text-6xl mb-4"></i>
+                        <p class="text-lg">开始你的 AI 对话之旅</p>
+                        <p class="text-sm mt-2">支持文本、图片、文件上传</p>
+                    </div>
+                </div>
+
+                <!-- Input Area -->
+                <div class="border-t border-gray-200 p-4 bg-gray-50">
+                    <!-- File Preview -->
+                    <div id="filePreview" class="mb-3 hidden">
+                        <div class="flex flex-wrap gap-2" id="fileList"></div>
+                    </div>
+
+                    <div class="flex items-end space-x-2">
+                        <!-- File Upload -->
+                        <label class="cursor-pointer px-3 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition">
+                            <i class="fas fa-paperclip"></i>
+                            <input type="file" id="fileInput" multiple class="hidden" onchange="handleFileSelect(event)">
+                        </label>
+
+                        <!-- Text Input -->
+                        <textarea
+                            id="messageInput"
+                            placeholder="输入消息... (Shift+Enter 换行，Enter 发送)"
+                            class="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                            rows="1"
+                            onkeydown="handleKeyPress(event)"
+                        ></textarea>
+
+                        <!-- Send Button -->
+                        <button
+                            onclick="sendMessage()"
+                            id="sendButton"
+                            class="px-6 py-3 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-lg hover:from-blue-600 hover:to-indigo-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            <i class="fas fa-paper-plane"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sidebar (History) -->
+            <div id="historySidebar" class="w-80 border-l border-gray-200 bg-gray-50 hidden overflow-y-auto">
+                <div class="p-4">
+                    <div class="flex items-center justify-between mb-4">
+                        <h2 class="text-lg font-bold text-gray-800">对话历史</h2>
+                        <button onclick="toggleHistory()" class="text-gray-500 hover:text-gray-700">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <div id="historyList" class="space-y-2">
+                        <!-- History items will be loaded here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <footer class="bg-white rounded-b-2xl shadow-lg p-3 text-center text-xs text-gray-500">
+            <p>Powered by <span class="font-semibold text-blue-600">Gemini API</span> |
+            <span id="statusIndicator" class="inline-flex items-center">
+                <span class="w-2 h-2 bg-green-500 rounded-full mr-1"></span> 在线
+            </span>
+            </p>
+        </footer>
+    </div>
+
+    <script>
+        // 全局变量
+        let currentConversationId = null;
+        let uploadedFiles = [];
+        const API_BASE = window.location.origin;
+
+        // 初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            checkHealth();
+            autoResizeTextarea();
+        });
+
+        // 健康检查
+        async function checkHealth() {
+            try {
+                const response = await fetch(`${API_BASE}/health`);
+                const data = await response.json();
+                document.getElementById('statusIndicator').innerHTML = `
+                    <span class="w-2 h-2 bg-green-500 rounded-full mr-1"></span>
+                    在线 (${data.conversations.total} 个对话)
+                `;
+            } catch (error) {
+                document.getElementById('statusIndicator').innerHTML = `
+                    <span class="w-2 h-2 bg-red-500 rounded-full mr-1"></span> 离线
+                `;
+            }
+        }
+
+        // 自动调整文本框高度
+        function autoResizeTextarea() {
+            const textarea = document.getElementById('messageInput');
+            textarea.addEventListener('input', function() {
+                this.style.height = 'auto';
+                this.style.height = Math.min(this.scrollHeight, 200) + 'px';
+            });
+        }
+
+        // 处理键盘事件
+        function handleKeyPress(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+            }
+        }
+
+        // 文件选择
+        function handleFileSelect(event) {
+            const files = Array.from(event.target.files);
+            const preview = document.getElementById('filePreview');
+            const fileList = document.getElementById('fileList');
+
+            if (files.length > 0) {
+                preview.classList.remove('hidden');
+                fileList.innerHTML = files.map((file, index) => `
+                    <div class="flex items-center space-x-2 bg-white px-3 py-2 rounded-lg border border-gray-300">
+                        <i class="fas fa-file text-blue-500"></i>
+                        <span class="text-sm text-gray-700">${file.name}</span>
+                        <button onclick="removeFile(${index})" class="text-red-500 hover:text-red-700">
+                            <i class="fas fa-times text-xs"></i>
+                        </button>
+                    </div>
+                `).join('');
+            }
+        }
+
+        // 移除文件
+        function removeFile(index) {
+            const input = document.getElementById('fileInput');
+            const dt = new DataTransfer();
+            const files = Array.from(input.files);
+
+            files.splice(index, 1);
+            files.forEach(file => dt.items.add(file));
+            input.files = dt.files;
+
+            if (files.length === 0) {
+                document.getElementById('filePreview').classList.add('hidden');
+            } else {
+                handleFileSelect({ target: input });
+            }
+        }
+
+        // 发送消息
+        async function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+            const fileInput = document.getElementById('fileInput');
+            const files = fileInput.files;
+
+            if (!message && files.length === 0) return;
+
+            // 禁用发送按钮
+            const sendButton = document.getElementById('sendButton');
+            sendButton.disabled = true;
+
+            // 显示用户消息
+            if (message) {
+                addMessage('user', message);
+            }
+
+            // 上传文件
+            let filePaths = [];
+            if (files.length > 0) {
+                try {
+                    const formData = new FormData();
+                    Array.from(files).forEach(file => formData.append('files', file));
+
+                    const uploadResponse = await fetch(`${API_BASE}/upload`, {
+                        method: 'POST',
+                        body: formData
+                    });
+                    const uploadData = await uploadResponse.json();
+                    filePaths = uploadData.files;
+
+                    addMessage('system', `✅ 已上传 ${files.length} 个文件`);
+                } catch (error) {
+                    addMessage('error', '❌ 文件上传失败: ' + error.message);
+                    sendButton.disabled = false;
+                    return;
+                }
+            }
+
+            // 清空输入
+            input.value = '';
+            input.style.height = 'auto';
+            fileInput.value = '';
+            document.getElementById('filePreview').classList.add('hidden');
+
+            // 显示加载动画
+            const loadingId = addMessage('assistant', '<div class="typing-indicator"><span>●</span><span>●</span><span>●</span></div>', true);
+
+            try {
+                // 发送请求
+                const response = await fetch(`${API_BASE}/v1/chat/completions`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        model: document.getElementById('modelSelect').value,
+                        messages: [{ role: 'user', content: message || '分析上传的文件' }],
+                        conversation_id: currentConversationId,
+                        files: filePaths.length > 0 ? filePaths : null
+                    })
+                });
+
+                const data = await response.json();
+
+                // 移除加载动画
+                document.getElementById(loadingId).remove();
+
+                // 显示回复
+                addMessage('assistant', data.choices[0].message.content);
+
+                // 保存对话 ID
+                currentConversationId = data.conversation_id;
+
+            } catch (error) {
+                document.getElementById(loadingId).remove();
+                addMessage('error', '❌ 请求失败: ' + error.message);
+            }
+
+            // 启用发送按钮
+            sendButton.disabled = false;
+            input.focus();
+        }
+
+        // 添加消息
+        function addMessage(role, content, isLoading = false) {
+            const container = document.getElementById('messagesContainer');
+            const messageId = 'msg-' + Date.now();
+
+            // 移除欢迎消息
+            const welcome = container.querySelector('.text-center');
+            if (welcome) welcome.remove();
+
+            const messageDiv = document.createElement('div');
+            messageDiv.id = messageId;
+            messageDiv.className = 'message-enter flex items-start space-x-3';
+
+            let bgColor, icon, textColor;
+            if (role === 'user') {
+                bgColor = 'bg-blue-500 text-white ml-auto';
+                icon = '<i class="fas fa-user"></i>';
+                textColor = 'text-white';
+            } else if (role === 'assistant') {
+                bgColor = 'bg-gray-100 text-gray-800';
+                icon = '<i class="fas fa-robot"></i>';
+                textColor = 'text-gray-800';
+            } else if (role === 'system') {
+                bgColor = 'bg-yellow-100 text-yellow-800';
+                icon = '<i class="fas fa-info-circle"></i>';
+                textColor = 'text-yellow-800';
+            } else {
+                bgColor = 'bg-red-100 text-red-800';
+                icon = '<i class="fas fa-exclamation-triangle"></i>';
+                textColor = 'text-red-800';
+            }
+
+            messageDiv.innerHTML = `
+                <div class="w-8 h-8 rounded-full ${role === 'user' ? 'bg-blue-600' : 'bg-gray-300'} flex items-center justify-center flex-shrink-0">
+                    ${icon}
+                </div>
+                <div class="flex-1 ${role === 'user' ? 'text-right' : ''}">
+                    <div class="inline-block ${bgColor} rounded-2xl px-4 py-3 max-w-3xl">
+                        <div class="markdown-body ${textColor} text-sm">
+                            ${isLoading ? content : marked.parse(content)}
+                        </div>
+                    </div>
+                    <div class="text-xs text-gray-400 mt-1 ${role === 'user' ? 'text-right' : ''}">
+                        ${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
+                    </div>
+                </div>
+            `;
+
+            container.appendChild(messageDiv);
+            container.scrollTop = container.scrollHeight;
+
+            return messageId;
+        }
+
+        // 新对话
+        function newChat() {
+            currentConversationId = null;
+            document.getElementById('messagesContainer').innerHTML = `
+                <div class="text-center py-12 text-gray-400">
+                    <i class="fas fa-comments text-6xl mb-4"></i>
+                    <p class="text-lg">开始你的 AI 对话之旅</p>
+                    <p class="text-sm mt-2">支持文本、图片、文件上传</p>
+                </div>
+            `;
+            document.getElementById('messageInput').focus();
+        }
+
+        // 切换历史侧边栏
+        async function toggleHistory() {
+            const sidebar = document.getElementById('historySidebar');
+            sidebar.classList.toggle('hidden');
+
+            if (!sidebar.classList.contains('hidden')) {
+                await loadHistory();
+            }
+        }
+
+        // 加载历史记录
+        async function loadHistory() {
+            try {
+                const response = await fetch(`${API_BASE}/conversations`);
+                const data = await response.json();
+                const historyList = document.getElementById('historyList');
+
+                if (data.conversations.length === 0) {
+                    historyList.innerHTML = '<p class="text-gray-500 text-sm text-center py-4">暂无历史记录</p>';
+                    return;
+                }
+
+                historyList.innerHTML = data.conversations.map(conv => `
+                    <div class="bg-white p-3 rounded-lg border border-gray-200 hover:border-blue-500 cursor-pointer transition"
+                         onclick="loadConversation('${conv.conversation_id}')">
+                        <div class="flex items-center justify-between mb-1">
+                            <span class="text-sm font-medium text-gray-800">对话 ${conv.conversation_id.substring(0, 8)}...</span>
+                            <button onclick="event.stopPropagation(); deleteConversation('${conv.conversation_id}')"
+                                    class="text-red-500 hover:text-red-700 text-xs">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </div>
+                        <div class="text-xs text-gray-500">
+                            ${new Date(conv.modified).toLocaleString('zh-CN')}
+                        </div>
+                    </div>
+                `).join('');
+            } catch (error) {
+                console.error('加载历史失败:', error);
+            }
+        }
+
+        // 加载对话
+        async function loadConversation(conversationId) {
+            currentConversationId = conversationId;
+            addMessage('system', `✅ 已加载对话: ${conversationId.substring(0, 8)}...`);
+            toggleHistory();
+        }
+
+        // 删除对话
+        async function deleteConversation(conversationId) {
+            if (!confirm('确定要删除这个对话吗？')) return;
+
+            try {
+                await fetch(`${API_BASE}/conversations/${conversationId}`, {
+                    method: 'DELETE'
+                });
+                loadHistory();
+                if (currentConversationId === conversationId) {
+                    newChat();
+                }
+            } catch (error) {
+                alert('删除失败: ' + error.message);
+            }
+        }
+    </script>
+</body>
+</html>
