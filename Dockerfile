@@ -1,43 +1,56 @@
-# 1. 使用基础镜像 (自带 Python 3.10)
+# 1. 使用 Kasm 基础镜像 (Ubuntu 20.04 based)
 FROM kasmweb/desktop:1.18.0
 
 # 切换 root 用户进行安装
 USER root
 
-# 2. 安装系统级依赖 (用于 browser-cookie3 读取 Cookie)
-RUN apt-get update && \
-    apt-get install -y \
-    libsecret-1-0 \
-    dbus-x11 \
-    gnome-keyring \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+# 设置环境变量，防止 Python 生成 .pyc 文件和缓冲输出
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
-# 3. 设置工作目录
+# 2. 安装 Python 3.10 和必要的系统库
+# 基础镜像是 Ubuntu 20.04 (Python 3.8)，需要 PPA
+RUN apt-get update && \
+    apt-get install -y software-properties-common curl git \
+    libsecret-1-0 dbus-x11 gnome-keyring && \
+    add-apt-repository -y ppa:deadsnakes/ppa && \
+    apt-get update && \
+    apt-get install -y python3.10 python3.10-distutils && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# 3. 为 Python 3.10 安装 pip
+RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.10
+
+# 4. 设置工作目录
 WORKDIR /gemini
 
-# 4. 安装 Python 依赖
+# 5. 复制依赖文件并安装 (利用 Docker 缓存)
 COPY requirements_linux.txt .
-# 注意：这里直接使用系统自带的 python3 (即 3.10)
-RUN pip3 install --no-cache-dir -r requirements_linux.txt
+# 务必指定使用 python3.10 运行 pip
+RUN python3.10 -m pip install --no-cache-dir -r requirements_linux.txt
 
 # =======================================================
-# 5. 关键步骤：自动给 gemini_webapi 打补丁适配 Python 3.10
+# 6. 关键步骤：自动给 gemini_webapi 打补丁适配 Python 3.10
 # =======================================================
-# 原理：找到 constants.py，把 "from enum import ..., StrEnum" 替换为兼容代码
-RUN export PACKAGE_PATH=$(python3 -c "import gemini_webapi; import os; print(os.path.dirname(gemini_webapi.__file__))") && \
+# 使用 'pip show' 获取路径，安全地给 constants.py 打补丁
+RUN export LOCATION=$(python3.10 -m pip show gemini-webapi | grep Location | awk '{print $2}') && \
+    export PACKAGE_PATH="$LOCATION/gemini_webapi" && \
+    echo "Found package at: $PACKAGE_PATH" && \
     sed -i 's/from enum import Enum, IntEnum, StrEnum/from enum import Enum, IntEnum\ntry:\n    from enum import StrEnum\nexcept ImportError:\n    class StrEnum(str, Enum):\n        pass/' "$PACKAGE_PATH/constants.py" && \
-    echo "✅ Patch applied to $PACKAGE_PATH/constants.py"
+    echo "✅ 补丁已应用到: $PACKAGE_PATH/constants.py"
 
-# 6. 复制项目代码
+# 7. 复制项目所有文件
 COPY . .
 
-# 7. 权限修正 (确保 kasm-user 能写入数据)
-RUN chown -R kasm-user:kasm-user /gemini
+# 8. 权限修正 (这是解决 Permission Error 的关键)
+# 显式创建需要写入的目录，确保它们存在且权限正确
+RUN mkdir -p stored_images conversations uploads static && \
+    chown -R kasm-user:kasm-user /gemini
 
-# 8. 切换回普通用户
+# 9. 切换回 Kasm 默认用户
 USER kasm-user
 
-# 9. 声明端口
+# 10. 声明端口 (6901: Kasm桌面, 8000: API)
 EXPOSE 6901 8000
 
-# 保持默认启动命令 (进入桌面)
+# 保持默认启动命令 (启动 Kasm 桌面环境)
