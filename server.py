@@ -25,25 +25,33 @@ except ImportError:
 
 load_dotenv()
 
-# 配置
+# --- 配置 ---
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", 8000))
+
+# 目录配置
 IMAGES_BASE_DIR = Path(os.getenv("IMAGES_DIR", "stored_images"))
 IMAGES_BASE_DIR.mkdir(exist_ok=True)
-
 CONVERSATIONS_DIR = Path("conversations")
 CONVERSATIONS_DIR.mkdir(exist_ok=True)
-
 UPLOADS_DIR = Path("uploads")
 UPLOADS_DIR.mkdir(exist_ok=True)
-
 STATIC_DIR = Path("static")
 STATIC_DIR.mkdir(exist_ok=True)
 
+# [新增] Cookie 缓存文件路径
+COOKIE_CACHE_FILE = Path("cookie_cache.json")
+
+DEBUG = os.getenv("DEBUG", "true").lower() == "true"
+
+# --- 全局变量 ---
 gemini_client = None
 active_chats = {}
 
-DEBUG = os.getenv("DEBUG", "true").lower() == "true"
+# 🔥 熔断机制变量 🔥
+auth_failure_count = 0  # 连续认证失败次数
+last_auth_failure_time = 0.0  # 上次失败时间戳
+COOL_DOWN_SECONDS = 300  # 冷却时间：5分钟
 
 # 依赖检查
 try:
@@ -69,15 +77,36 @@ def debug_log(message: str, level: str = "INFO"):
         print(f"[{timestamp}] {emoji} {message}")
 
 
-def get_auto_cookies():
-    """尝试从浏览器自动获取 Gemini Cookie"""
+def get_auto_cookies(force_refresh: bool = False):
+    """
+    获取 Cookie (支持文件缓存)
+
+    :param force_refresh:
+        False (默认) -> 优先读取本地 cookie_cache.json 文件
+        True -> 强制从浏览器抓取，并更新到文件
+    """
+    # 1. [缓存优先] 尝试从本地文件读取
+    if not force_refresh and COOKIE_CACHE_FILE.exists():
+        try:
+            with open(COOKIE_CACHE_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                psid = data.get("SECURE_1PSID")
+                ts = data.get("SECURE_1PSIDTS")
+
+                if psid and ts:
+                    debug_log("📂 [缓存命中] 已从 cookie_cache.json 加载 Cookie", "INFO")
+                    return psid, ts
+        except Exception as e:
+            debug_log(f"⚠️ 读取缓存文件失败，将尝试从浏览器获取: {e}", "WARNING")
+            # 读取失败不中断，继续往下走去浏览器抓
+
+    # 2. [浏览器抓取]
     if not browser_cookie3:
-        debug_log("未安装 browser_cookie3，跳过自动获取", "WARNING")
+        debug_log("未安装 browser_cookie3，无法抓取", "WARNING")
         return None, None
 
-    debug_log("正在尝试从 Kasm Chrome 自动获取 Cookie...", "INFO")
+    debug_log("🌍 正在从 Kasm Chrome 浏览器抓取最新 Cookie...", "INFO")
     try:
-        # 尝试读取 Chrome 数据库
         cj = browser_cookie3.chrome(domain_name='.google.com')
         psid = None
         ts = None
@@ -89,13 +118,27 @@ def get_auto_cookies():
                 ts = cookie.value
 
         if psid and ts:
-            debug_log(f"✅ 自动获取成功! TS: {ts[:10]}...", "SUCCESS")
+            debug_log(f"✅ 浏览器抓取成功! TS: {ts[:10]}...", "SUCCESS")
+
+            # 3. [写入缓存] 保存到文件，方便下次使用
+            try:
+                with open(COOKIE_CACHE_FILE, 'w', encoding='utf-8') as f:
+                    json.dump({
+                        "SECURE_1PSID": psid,
+                        "SECURE_1PSIDTS": ts,
+                        "updated_at": datetime.now().isoformat()
+                    }, f, indent=2)
+                debug_log("💾 Cookie 已保存到本地缓存文件 (cookie_cache.json)", "SUCCESS")
+            except Exception as e:
+                debug_log(f"⚠️ 缓存写入失败 (不影响运行): {e}", "WARNING")
+
             return psid, ts
         else:
-            debug_log("❌ 浏览器数据库读取成功，但未找到 Gemini Cookie (请确认已登录)", "WARNING")
+            debug_log("❌ 浏览器读取成功但未找到 Gemini Cookie (请确认已登录)", "WARNING")
             return None, None
+
     except Exception as e:
-        debug_log(f"❌ 自动获取失败: {e}", "ERROR")
+        debug_log(f"❌ 浏览器抓取失败: {e}", "ERROR")
         return None, None
 
 
@@ -107,34 +150,29 @@ async def lifespan(app: FastAPI):
     secure_1psid = os.getenv("SECURE_1PSID")
     secure_1psidts = os.getenv("SECURE_1PSIDTS")
 
-    # 2. 如果环境变量缺失，尝试自动获取
+    # 2. 尝试自动获取 (force_refresh=False, 优先读缓存文件)
     if not secure_1psid or not secure_1psidts:
-        debug_log("环境变量未配置 Cookie，尝试自动获取...", "INFO")
-        auto_psid, auto_ts = get_auto_cookies()
+        debug_log("尝试加载 Cookie (环境变量 -> 文件缓存 -> 浏览器)...", "INFO")
+        auto_psid, auto_ts = get_auto_cookies(force_refresh=False)
         if auto_psid and auto_ts:
             secure_1psid = auto_psid
             secure_1psidts = auto_ts
 
     debug_log("开始初始化 Gemini 客户端...", "INFO")
     try:
-        # 使用最终获取到的 Cookie 初始化
         if not secure_1psid or not secure_1psidts:
-            # 这里不抛出致命错误，允许服务启动，等到请求时再尝试获取
-            debug_log("⚠️ 启动时未获取到 Cookie，将等待首次请求时获取", "WARNING")
+            debug_log("⚠️ 启动时未获取到 Cookie，将在首次请求时尝试获取", "WARNING")
         else:
             gemini_client = GeminiClient(secure_1psid, secure_1psidts)
-            # 【优化点1】: auto_refresh=False
-            # 关闭后台自动刷新，避免触发 Google 的 429 限流
+            # 关闭后台自动刷新
             await gemini_client.init(auto_refresh=False)
             debug_log("Gemini 客户端初始化成功 (被动刷新模式)", "SUCCESS")
 
-        # 打印目录信息
         debug_log(f"图片存储目录: {IMAGES_BASE_DIR.absolute()}", "INFO")
         debug_log(f"对话历史目录: {CONVERSATIONS_DIR.absolute()}", "INFO")
 
     except Exception as e:
         debug_log(f"初始化失败: {e}", "ERROR")
-        # 不阻断服务启动
     yield
 
 
@@ -215,9 +253,9 @@ async def root():
 @app.post("/v1/chat/completions")
 async def chat_completions(request: ChatRequest, req: Request):
     """
-    OpenAI 兼容接口 (增强版：支持 Cookie 失效自动重连)
+    OpenAI 兼容接口 (支持 Cookie 自动重连 + 熔断保护 + 文件缓存)
     """
-    global gemini_client
+    global gemini_client, auth_failure_count, last_auth_failure_time
 
     try:
         user_message = request.messages[-1].content
@@ -231,13 +269,33 @@ async def chat_completions(request: ChatRequest, req: Request):
 
         # --- 0. 客户端检查 ---
         if not gemini_client:
+            # 熔断检查
+            if auth_failure_count >= 3:
+                time_passed = time.time() - last_auth_failure_time
+                if time_passed < COOL_DOWN_SECONDS:
+                    raise HTTPException(
+                        status_code=503,
+                        detail=f"System cooling down. Wait {int(COOL_DOWN_SECONDS - time_passed)}s or refresh manually."
+                    )
+
             debug_log("客户端未初始化，尝试首次初始化...", "WARNING")
-            new_psid, new_ts = get_auto_cookies()
-            if new_psid and new_ts:
-                gemini_client = GeminiClient(new_psid, new_ts)
-                await gemini_client.init(auto_refresh=False)
-            else:
-                raise HTTPException(status_code=500, detail="Gemini client not initialized")
+            try:
+                # 首次尝试: force_refresh=False (允许读缓存)
+                new_psid, new_ts = get_auto_cookies(force_refresh=False)
+
+                # 如果缓存里的也是坏的怎么办？
+                # 没关系，下面发消息失败会触发 catch 里的 force_refresh=True
+
+                if new_psid and new_ts:
+                    gemini_client = GeminiClient(new_psid, new_ts)
+                    await gemini_client.init(auto_refresh=False)
+                    auth_failure_count = 0
+                else:
+                    raise Exception("No cookies found")
+            except Exception as e:
+                auth_failure_count += 1
+                last_auth_failure_time = time.time()
+                raise HTTPException(status_code=500, detail="Gemini client init failed")
 
         # --- 1. 获取或创建对话 ---
         chat = None
@@ -259,7 +317,7 @@ async def chat_completions(request: ChatRequest, req: Request):
             active_chats[conversation_id] = chat
             debug_log(f"初始化新会话: {conversation_id}", "CHAT")
 
-        # --- 2. 发送消息 (带失效重试逻辑) ---
+        # --- 2. 发送消息 (带熔断保护的重试逻辑) ---
         debug_log("正在发送消息到 Gemini...", "REQUEST")
         start_time = time.time()
         response = None
@@ -270,27 +328,47 @@ async def chat_completions(request: ChatRequest, req: Request):
             else:
                 response = await chat.send_message(user_message)
 
+            # 成功则重置计数器
+            if auth_failure_count > 0:
+                debug_log("✅ 调用成功，系统恢复健康，重置熔断计数器。", "SUCCESS")
+                auth_failure_count = 0
+
         except Exception as first_e:
-            # 捕获异常，分析是否为认证失效
+            # 捕获异常
             error_str = str(first_e).lower()
-            # 增加对 429 的判断，如果偶发 429 也尝试重置一下
             is_auth_error = "401" in error_str or "403" in error_str or "cookie" in error_str or "unauthenticated" in error_str or "429" in error_str
 
             if is_auth_error:
-                debug_log(f"⚠️ 遇到认证或限流错误 ({first_e})，尝试自动重连...", "WARNING")
+                current_time = time.time()
 
-                # A. 重新从浏览器数据库读取 Cookie
-                new_psid, new_ts = get_auto_cookies()
+                # 熔断检查
+                if auth_failure_count >= 3:
+                    time_passed = current_time - last_auth_failure_time
+                    if time_passed < COOL_DOWN_SECONDS:
+                        remaining = int(COOL_DOWN_SECONDS - time_passed)
+                        err_msg = f"🔥 熔断保护生效中：连续认证失败。请等待 {remaining} 秒或去 Kasm 手动刷新页面。"
+                        debug_log(err_msg, "ERROR")
+                        raise HTTPException(status_code=503, detail=err_msg)
+                    else:
+                        debug_log("❄️ 冷却时间已过，重置计数器，允许尝试一次...", "INFO")
+                        auth_failure_count = 0
 
-                if new_psid and new_ts:
-                    debug_log("✅ 成功获取新 Cookie，正在重置客户端...", "INFO")
+                debug_log(f"⚠️ 认证失效 ({first_e})，正在强制从浏览器刷新 (Skip Cache)...", "WARNING")
 
-                    # B. 重新初始化 (关键：保持 auto_refresh=False)
-                    # 重新实例化一个 client 对象
+                try:
+                    # 【关键点】这里 force_refresh=True
+                    # 意味着：既然报错了，说明缓存里的文件肯定是过期的，必须去浏览器抓新的
+                    new_psid, new_ts = get_auto_cookies(force_refresh=True)
+
+                    if not new_psid or not new_ts:
+                        raise Exception("无法从浏览器读取到有效 Cookie")
+
+                    debug_log("✅ 成功抓取新 Cookie，正在重置客户端...", "INFO")
+
                     gemini_client = GeminiClient(new_psid, new_ts)
                     await gemini_client.init(auto_refresh=False)
 
-                    # C. 重建对话对象 (因为旧 chat 绑定了旧 client)
+                    # 重建会话
                     metadata = load_conversation(conversation_id)
                     if metadata:
                         chat = gemini_client.start_chat(metadata=metadata, model=model)
@@ -299,18 +377,23 @@ async def chat_completions(request: ChatRequest, req: Request):
 
                     active_chats[conversation_id] = chat
 
-                    # D. 再次尝试发送
+                    # 重试发送
                     debug_log("🔄 正在重试发送消息...", "REQUEST")
                     if files:
                         response = await chat.send_message(user_message, files=files)
                     else:
                         response = await chat.send_message(user_message)
+
                     debug_log("✅ 重试成功！", "SUCCESS")
-                else:
-                    raise HTTPException(status_code=401,
-                                        detail="Session expired. Please login to Google in Kasm desktop.")
+                    auth_failure_count = 0
+
+                except Exception as retry_e:
+                    # 重试失败 -> 计数 +1
+                    auth_failure_count += 1
+                    last_auth_failure_time = time.time()
+                    debug_log(f"❌ 重连失败 ({auth_failure_count}/3): {retry_e}", "ERROR")
+                    raise HTTPException(status_code=401, detail="Session expired and auto-recover failed.")
             else:
-                # 其他错误直接抛出
                 raise first_e
 
         # --- 3. 处理响应 ---
