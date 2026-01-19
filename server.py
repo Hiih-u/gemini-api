@@ -334,7 +334,6 @@ async def chat_completions(request: ChatRequest, req: Request):
 
         content = response.text or ""
 
-        # 保存对话历史
         save_conversation(conversation_id, chat.metadata)
 
         # 处理图片
