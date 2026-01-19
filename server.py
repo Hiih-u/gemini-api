@@ -266,6 +266,7 @@ async def chat_completions(request: ChatRequest, req: Request):
         debug_log("=" * 60, "REQUEST")
         debug_log(f"模型: {request.model}", "REQUEST")
         debug_log(f"对话ID: {conversation_id or '新对话'}", "REQUEST")
+        debug_log(f"消息: {user_message[:100]}{'...' if len(user_message) > 100 else ''}", "REQUEST")
 
         # --- 0. 客户端检查 ---
         if not gemini_client:
