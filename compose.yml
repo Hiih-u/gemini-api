@@ -5,7 +5,7 @@ services:
     shm_size: 512m
     ports:
       - "6901:6901"
-      - "8000:8000"
+      - "8000:61080"
     environment:
       - VNC_PW=password
       - VNC_USER=kasm_user
