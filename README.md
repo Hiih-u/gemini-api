@@ -104,7 +104,7 @@ docker compose up -d
 
 ```bash
 # 1. 进入项目目录
-cd /gemini
+docker exec -it gemini-kasm bash
 
 # 2. 加载 D-Bus 环境变量 (用于解锁系统的钥匙串以读取加密 Cookie)
 eval $(dbus-launch --sh-syntax)
