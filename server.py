@@ -226,13 +226,16 @@ async def root():
 @app.post("/v1/chat/completions")
 async def chat_completions(request: ChatRequest, req: Request):
     """
-    OpenAI 兼容接口
+    OpenAI 兼容接口 (增强版：支持 Cookie 失效自动重连)
 
     支持：
     1. 纯文本对话
     2. 带文件的对话（files 参数传递文件路径）
     3. 对话历史（conversation_id）
+    4. 自动处理 401/403 认证失效并重试
     """
+    global gemini_client  # 关键：需要修改全局客户端对象
+
     try:
         user_message = request.messages[-1].content
         model = MODEL_MAP.get(request.model, Model.UNSPECIFIED)
@@ -245,9 +248,8 @@ async def chat_completions(request: ChatRequest, req: Request):
         debug_log(f"消息: {user_message[:100]}{'...' if len(user_message) > 100 else ''}", "REQUEST")
         if files:
             debug_log(f"包含文件: {len(files)} 个", "FILE")
-        debug_log("=" * 60, "REQUEST")
 
-        # 获取或创建对话
+        # --- 1. 获取或创建对话 ---
         chat = None
         if conversation_id:
             if conversation_id in active_chats:
@@ -263,53 +265,97 @@ async def chat_completions(request: ChatRequest, req: Request):
         if chat is None:
             if not conversation_id:
                 conversation_id = str(uuid.uuid4())
-
+            # 如果是新对话，直接开始
             chat = gemini_client.start_chat(model=model)
             active_chats[conversation_id] = chat
             debug_log(f"初始化新会话: {conversation_id}", "CHAT")
 
-        # 发送消息（官方 API 自动处理文件）
+        # --- 2. 发送消息 (带失效重试逻辑) ---
         debug_log("正在发送消息到 Gemini...", "REQUEST")
         start_time = time.time()
+        response = None
 
-        if files:
-            response = await chat.send_message(user_message, files=files)
-        else:
-            response = await chat.send_message(user_message)
+        try:
+            # 第一次尝试发送
+            if files:
+                response = await chat.send_message(user_message, files=files)
+            else:
+                response = await chat.send_message(user_message)
 
+        except Exception as first_e:
+            # 捕获异常，分析是否为认证失效
+            error_str = str(first_e).lower()
+            is_auth_error = "401" in error_str or "403" in error_str or "cookie" in error_str or "unauthenticated" in error_str
+
+            if is_auth_error:
+                debug_log(f"⚠️ 认证失效 ({first_e})，正在尝试自动续期...", "WARNING")
+
+                # A. 重新从浏览器数据库读取 Cookie
+                new_psid, new_ts = get_auto_cookies()
+
+                if new_psid and new_ts:
+                    debug_log("✅ 成功从浏览器获取新 Cookie，正在重置客户端...", "INFO")
+
+                    # B. 重新初始化全局客户端
+                    gemini_client = GeminiClient(new_psid, new_ts)
+                    await gemini_client.init(auto_refresh=True)
+
+                    # C. 重建对话对象 (必须！旧对象已废弃)
+                    # 如果有历史记录，尝试恢复上下文
+                    metadata = load_conversation(conversation_id)
+                    if metadata:
+                        chat = gemini_client.start_chat(metadata=metadata, model=model)
+                    else:
+                        chat = gemini_client.start_chat(model=model)
+
+                    # 更新缓存
+                    active_chats[conversation_id] = chat
+
+                    # D. 再次尝试发送 (重试)
+                    debug_log("🔄 正在重试发送消息...", "REQUEST")
+                    if files:
+                        response = await chat.send_message(user_message, files=files)
+                    else:
+                        response = await chat.send_message(user_message)
+
+                    debug_log("✅ 重试成功！", "SUCCESS")
+                else:
+                    # 获取不到 Cookie，彻底失败
+                    debug_log("❌ 无法自动获取 Cookie，请检查 Kasm 桌面是否已登录 Google", "ERROR")
+                    raise HTTPException(status_code=401,
+                                        detail="Session expired. Please login to Google in Kasm desktop.")
+            else:
+                # 如果不是认证错误（比如网络超时、参数错误），直接抛出，不重试
+                raise first_e
+
+        # --- 3. 处理响应 ---
         elapsed_time = time.time() - start_time
         debug_log(f"收到响应 (耗时: {elapsed_time:.2f}s)", "RESPONSE")
 
         content = response.text or ""
-        debug_log(f"响应长度: {len(content)} 字符", "RESPONSE")
 
         # 保存对话历史
         save_conversation(conversation_id, chat.metadata)
 
-        # 处理 AI 生成的图片（使用官方 API 的 save 方法）
+        # 处理图片
         if response.images:
             debug_log(f"响应包含 {len(response.images)} 张图片", "IMAGE")
             base_url = f"{req.url.scheme}://{req.headers.get('host', req.client.host)}"
             content += "\n\n**生成的图片：**\n"
-
             today_dir = get_today_dir()
 
             for idx, img in enumerate(response.images, 1):
                 filename = generate_filename()
-                # 使用官方 API 的 save 方法
                 success = await img.save(
                     path=str(today_dir),
                     filename=f"{filename}.png"
                 )
-
                 if success:
-                    # 查找保存的文件
                     saved_file = today_dir / f"{filename}.png"
                     if saved_file.exists():
                         relative_path = saved_file.relative_to(IMAGES_BASE_DIR)
                         image_url = f"{base_url}/images/{relative_path.as_posix()}"
                         content += f"\n![Image {idx}]({image_url})"
-                        debug_log(f"图片 #{idx} 已保存", "SUCCESS")
 
         return {
             "id": f"chatcmpl-{uuid.uuid4()}",
@@ -327,10 +373,13 @@ async def chat_completions(request: ChatRequest, req: Request):
             }]
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         debug_log(f"请求失败: {type(e).__name__}: {e}", "ERROR")
         import traceback
         traceback.print_exc()
+        # 统一返回 500
         raise HTTPException(status_code=500, detail=str(e))
 
 
