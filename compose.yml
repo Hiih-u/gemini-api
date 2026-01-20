@@ -1,4 +1,19 @@
 services:
+# === Nginx 负载均衡器 (统一入口: 8000) ===
+  nginx:
+    image: nginx:alpine
+    container_name: gemini-nginx
+    ports:
+      - "8000:80"  # 宿主机 8000 -> 容器 80
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro  # 挂载配置文件
+    depends_on:
+      - worker-1
+      - worker-2
+    networks:
+      - gemini-net
+    restart: always
+
 # === Worker 1 (端口: VNC 6901, API 8001) ===
   worker-1:
     image: www527/gemini-kasm:2.0
