@@ -1,21 +1,47 @@
 services:
-  kasm-tool:
-    image: www527/gemini-kasm:1.0
-    container_name: gemini-kasm
+# === Worker 1 (端口: VNC 6901, API 8001) ===
+  worker-1:
+    image: www527/gemini-kasm:2.0
+    container_name: gemini-kasm-1
     shm_size: 512m
     ports:
       - "6901:6901"
-      - "8000:61080"
+      - "8001:8000"
     environment:
       - VNC_PW=password
       - VNC_USER=kasm_user
       - APP_ARGS=--no-sandbox
     volumes:
       # 挂载 Chrome 配置目录
-      - ./kasm_profile:/home/kasm-user/.config
-#      - ./conversations:/gemini/conversations
-#      - ./stored_images:/gemini/stored_images
-      - .:/gemini
+      - ./profiles/worker1:/home/kasm-user/.config
+      - ./data/worker1/conversations:/gemini/conversations
+      - ./data/worker1/images:/gemini/stored_images
+      - ./data/worker1/cookie_cache.json:/gemini/cookie_cache.json
+      - ./server.py:/server.py
+    networks:
+      - gemini-net
+    restart: unless-stopped
+
+
+# === Worker 2 (端口: VNC 6902, API 8002 ===
+  worker-2:
+    image: www527/gemini-kasm:2.0
+    container_name: gemini-kasm-2
+    shm_size: 512m
+    ports:
+      - "6902:6901"
+      - "8002:8000"
+    environment:
+      - VNC_PW=password
+      - VNC_USER=kasm_user
+      - APP_ARGS=--no-sandbox
+    volumes:
+      # 挂载 Chrome 配置目录
+      - ./profiles/worker2:/home/kasm-user/.config
+      - ./data/worker2/conversations:/gemini/conversations
+      - ./data/worker2/images:/gemini/stored_images
+      - ./server.py:/server.py
+      - ./data/worker2/cookie_cache.json:/gemini/cookie_cache.json
     networks:
       - gemini-net
     restart: unless-stopped

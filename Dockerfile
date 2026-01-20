@@ -42,7 +42,7 @@ RUN export LOCATION=$(python3.10 -m pip show gemini-webapi | grep Location | awk
     echo "✅ 补丁已应用到: $PACKAGE_PATH/constants.py"
 
 # 7. 复制项目所有文件
-COPY . .
+COPY server.py .
 
 # 8. 权限修正 (这是解决 Permission Error 的关键)
 # 显式创建需要写入的目录，确保它们存在且权限正确
