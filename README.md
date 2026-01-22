@@ -83,7 +83,7 @@ docker exec -it gemini-kasm-1 bash
 eval $(dbus-launch --sh-syntax)
 
 # 2. 启动后端服务
-python3.10 server.py
+python3.10 server.py > /proc/1/fd/1 2>&1
 
 ```
 
