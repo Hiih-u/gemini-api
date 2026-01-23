@@ -2,7 +2,7 @@
 
 这是一个基于 **FastAPI** 和 **Kasm Workspaces** 构建的 Gemini AI 智能对话系统。
 
-本项目利用 Kasm 的容器化桌面环境，完美解决了 Gemini Web API 的 Cookie 获取与保活问题。通过在容器内部运行 Chrome 浏览器，系统能够**全自动获取和刷新 Google 账号 Cookie**。
+本项目利用 Kasm 的容器化桌面环境，完美解决了 Gemini Web API 的 Cookie 获取与保活问题。通过在容器内部运行 Chrome 浏览器，系统能够**自动获取和刷新 Google 账号 Cookie**。
 
 **特别增强**：本项目已升级为**多实例架构**，支持同时运行多个独立的 Worker，每个 Worker 绑定独立的 Google 账号和浏览器环境，实现物理级的数据隔离与负载分担。
 
