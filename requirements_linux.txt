@@ -24,3 +24,4 @@ typing_extensions
 urllib3
 uvicorn
 browser-cookie3
+nacos-sdk-python==0.1.12

@@ -1,22 +1,23 @@
 services:
 # === Nginx 负载均衡器 (统一入口: 8000) ===
-  nginx:
-    image: nginx:alpine
-    container_name: gemini-nginx
+  nacos:
+    image: nacos/nacos-server:v2.2.3
+    container_name: nacos-standalone
+    environment:
+      - MODE=standalone        # 单机模式 (开发/测试足够)
+      - JVM_XMS=256m           # 限制最小内存
+      - JVM_XMX=256m           # 限制最大内存
+      - NACOS_AUTH_ENABLE=false # 关闭鉴权，方便调试
     ports:
-      - "8000:80"  # 宿主机 8000 -> 容器 80
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro  # 挂载配置文件
-    depends_on:
-      - worker-1
-      - worker-2
+      - "8848:8848"            # Nacos 控制台端口
+      - "9848:9848"            # Nacos 客户端通讯端口 (gRPC)
     networks:
       - gemini-net
     restart: always
 
 # === Worker 1 (端口: VNC 6901, API 8001) ===
   worker-1:
-    image: www527/gemini-kasm:2.0
+    image: www527/gemini-kasm:3.0
     container_name: gemini-kasm-1
     shm_size: 512m
     ports:
@@ -26,6 +27,9 @@ services:
       - VNC_PW=password
       - VNC_USER=kasm_user
       - APP_ARGS=--no-sandbox
+      - NACOS_SERVER_ADDR=nacos:8848
+      - EXTERNAL_IP=192.168.202.155
+      - EXTERNAL_PORT=8001
     volumes:
       # 挂载 Chrome 配置目录
       - ./profiles/worker1:/home/kasm-user/.config
@@ -40,7 +44,7 @@ services:
 
 # === Worker 2 (端口: VNC 6902, API 8002 ===
   worker-2:
-    image: www527/gemini-kasm:2.0
+    image: www527/gemini-kasm:3.0
     container_name: gemini-kasm-2
     shm_size: 512m
     ports:
@@ -50,6 +54,9 @@ services:
       - VNC_PW=password
       - VNC_USER=kasm_user
       - APP_ARGS=--no-sandbox
+      - NACOS_SERVER_ADDR=nacos:8848
+      - EXTERNAL_IP=192.168.202.155
+      - EXTERNAL_PORT=8002
     volumes:
       # 挂载 Chrome 配置目录
       - ./profiles/worker2:/home/kasm-user/.config
