@@ -7,6 +7,7 @@ import json
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
+from random import random
 from typing import Optional, List
 
 from dotenv import load_dotenv
@@ -51,7 +52,10 @@ active_chats = {}
 # 🔥 熔断机制变量 🔥
 auth_failure_count = 0  # 连续认证失败次数
 last_auth_failure_time = 0.0  # 上次失败时间戳
-COOL_DOWN_SECONDS = 300  # 冷却时间：5分钟
+
+NORMAL_COOL_DOWN = 900        # 常规冷却：15分钟 (针对 401/Cookie失效)
+CRITICAL_COOL_DOWN = 3600     # 严重冷却：1小时 (针对 429 限流)
+JITTER_SECONDS = 300
 
 # 依赖检查
 try:
@@ -253,7 +257,7 @@ async def root():
 @app.post("/v1/chat/completions")
 async def chat_completions(request: ChatRequest, req: Request):
     """
-    OpenAI 兼容接口 (支持 Cookie 自动重连 + 熔断保护 + 文件缓存)
+    OpenAI 兼容接口 (支持 Cookie 自动重连 + 429必杀熔断 + 随机抖动 + 文件缓存)
     """
     global gemini_client, auth_failure_count, last_auth_failure_time
 
@@ -268,37 +272,63 @@ async def chat_completions(request: ChatRequest, req: Request):
         debug_log(f"对话ID: {conversation_id or '新对话'}", "REQUEST")
         debug_log(f"消息: {user_message[:100]}{'...' if len(user_message) > 100 else ''}", "REQUEST")
 
-        # --- 0. 客户端检查 ---
-        if not gemini_client:
-            # 熔断检查
-            if auth_failure_count >= 3:
-                time_passed = time.time() - last_auth_failure_time
-                if time_passed < COOL_DOWN_SECONDS:
-                    raise HTTPException(
-                        status_code=503,
-                        detail=f"System cooling down. Wait {int(COOL_DOWN_SECONDS - time_passed)}s or refresh manually."
-                    )
+        # =================================================================
+        # --- 0. 客户端检查 (新增 429 熔断与抖动逻辑) ---
+        # =================================================================
+        # 只有在有失败记录，或者客户端未初始化时才进入检查
+        if not gemini_client or auth_failure_count >= 3:
 
-            debug_log("客户端未初始化，尝试首次初始化...", "WARNING")
-            try:
-                # 首次尝试: force_refresh=False (允许读缓存)
-                new_psid, new_ts = get_auto_cookies(force_refresh=False)
+            # 1. 确定冷却策略
+            # count >= 100 意味着触发了 429 严重限流，使用长冷却时间
+            base_cool_down = CRITICAL_COOL_DOWN if auth_failure_count >= 100 else NORMAL_COOL_DOWN
 
-                # 如果缓存里的也是坏的怎么办？
-                # 没关系，下面发消息失败会触发 catch 里的 force_refresh=True
+            # 2. 计算实际冷却时间 (带随机抖动)
+            # 实际冷却 = 基础时间 + 随机(0 ~ 300秒)
+            actual_cool_down = base_cool_down + random.randint(0, JITTER_SECONDS)
 
-                if new_psid and new_ts:
-                    gemini_client = GeminiClient(new_psid, new_ts)
-                    await gemini_client.init(auto_refresh=False)
-                    auth_failure_count = 0
-                else:
-                    raise Exception("No cookies found")
-            except Exception as e:
-                auth_failure_count += 1
-                last_auth_failure_time = time.time()
-                raise HTTPException(status_code=500, detail="Gemini client init failed")
+            time_passed = time.time() - last_auth_failure_time
 
+            # 3. 检查是否处于冷却期
+            if time_passed < actual_cool_down:
+                remaining = int(actual_cool_down - time_passed)
+                reason = "Google 严重流控 (429)" if auth_failure_count >= 100 else "认证失效保护"
+
+                error_detail = (
+                    f"🔥 {reason} 生效中。系统已强制休眠。"
+                    f"请等待约 {remaining} 秒 ({remaining // 60}分钟) 后重试。"
+                )
+                debug_log(error_detail, "WARNING")
+                # 直接拒绝，保护账号
+                raise HTTPException(status_code=503, detail=error_detail)
+
+            # 4. 如果冷却时间已过，尝试初始化 (如果 client 是 None)
+            if not gemini_client:
+                debug_log("客户端未初始化，尝试首次初始化...", "WARNING")
+                try:
+                    # 首次/冷却后尝试: 优先读缓存 (force_refresh=False)
+                    new_psid, new_ts = get_auto_cookies(force_refresh=False)
+
+                    if new_psid and new_ts:
+                        gemini_client = GeminiClient(new_psid, new_ts)
+                        await gemini_client.init(auto_refresh=False)
+                        # 注意：这里不急着重置 auth_failure_count，等发送成功了再重置
+                        # 但如果是首次初始化成功，可以认为是健康的
+                        if auth_failure_count < 100:
+                            auth_failure_count = 0
+                    else:
+                        raise Exception("No cookies found during init")
+                except Exception as e:
+                    # 初始化失败，计数器 +1 (如果是 429 状态，保持 100+; 普通状态 +1)
+                    if auth_failure_count < 100:
+                        auth_failure_count += 1
+                    last_auth_failure_time = time.time()
+                    raise HTTPException(status_code=500, detail="Gemini client init failed")
+            else:
+                debug_log("❄️ 冷却时间已过，尝试解除熔断...", "INFO")
+
+        # =================================================================
         # --- 1. 获取或创建对话 ---
+        # =================================================================
         chat = None
         if conversation_id:
             if conversation_id in active_chats:
@@ -318,7 +348,9 @@ async def chat_completions(request: ChatRequest, req: Request):
             active_chats[conversation_id] = chat
             debug_log(f"初始化新会话: {conversation_id}", "CHAT")
 
-        # --- 2. 发送消息 (带熔断保护的重试逻辑) ---
+        # =================================================================
+        # --- 2. 发送消息 (核心逻辑) ---
+        # =================================================================
         debug_log("正在发送消息到 Gemini...", "REQUEST")
         start_time = time.time()
         response = None
@@ -329,75 +361,95 @@ async def chat_completions(request: ChatRequest, req: Request):
             else:
                 response = await chat.send_message(user_message)
 
-            # 成功则重置计数器
+            # ✅ 成功！重置所有故障计数器
             if auth_failure_count > 0:
                 debug_log("✅ 调用成功，系统恢复健康，重置熔断计数器。", "SUCCESS")
                 auth_failure_count = 0
 
         except Exception as first_e:
-            # 捕获异常
+            # 捕获异常，转为小写字符串方便判断
             error_str = str(first_e).lower()
-            is_auth_error = "401" in error_str or "403" in error_str or "cookie" in error_str or "unauthenticated" in error_str or "429" in error_str
+            current_time = time.time()
+
+            # -----------------------------------------------------
+            # 🛑 策略 A: 针对 429 限流 (必杀逻辑)
+            # -----------------------------------------------------
+            if "429" in error_str:
+                debug_log(f"💀 严重警告: 触发 Google 429 限流! {first_e}", "ERROR")
+
+                # 直接将计数器设为 100，触发 CRITICAL_COOL_DOWN (1小时)
+                auth_failure_count = 100
+                last_auth_failure_time = current_time
+
+                # ❌ 绝对不要重试，直接报错
+                raise HTTPException(
+                    status_code=429,
+                    detail="Upstream service rate limited (429). System entering deep freeze for 1 hour."
+                )
+
+            # -----------------------------------------------------
+            # 🔄 策略 B: 针对常规认证失效 (尝试救活)
+            # -----------------------------------------------------
+            # 排除 429 后的其他认证错误
+            is_auth_error = "401" in error_str or "403" in error_str or "cookie" in error_str or "unauthenticated" in error_str
 
             if is_auth_error:
-                current_time = time.time()
-
-                # 熔断检查
-                if auth_failure_count >= 3:
-                    time_passed = current_time - last_auth_failure_time
-                    if time_passed < COOL_DOWN_SECONDS:
-                        remaining = int(COOL_DOWN_SECONDS - time_passed)
-                        err_msg = f"🔥 熔断保护生效中：连续认证失败。请等待 {remaining} 秒或去 Kasm 手动刷新页面。"
-                        debug_log(err_msg, "ERROR")
-                        raise HTTPException(status_code=503, detail=err_msg)
-                    else:
-                        debug_log("❄️ 冷却时间已过，重置计数器，允许尝试一次...", "INFO")
-                        auth_failure_count = 0
-
-                debug_log(f"⚠️ 认证失效 ({first_e})，正在强制从浏览器刷新 (Skip Cache)...", "WARNING")
+                debug_log(f"⚠️ 认证失效 ({first_e})，准备尝试刷新 Cookie...", "WARNING")
 
                 try:
-                    # 【关键点】这里 force_refresh=True
-                    # 意味着：既然报错了，说明缓存里的文件肯定是过期的，必须去浏览器抓新的
+                    # --- 尝试 1: 强制刷新 Cookie (Force Refresh) ---
+                    # 只有在非 429 错误时，才敢去浏览器抓新 Cookie
                     new_psid, new_ts = get_auto_cookies(force_refresh=True)
 
                     if not new_psid or not new_ts:
-                        raise Exception("无法从浏览器读取到有效 Cookie")
+                        raise Exception("浏览器中未找到有效 Cookie")
 
-                    debug_log("✅ 成功抓取新 Cookie，正在重置客户端...", "INFO")
+                    debug_log("✅ 抓取到新 Cookie，正在重置客户端...", "INFO")
 
+                    # 重置客户端
                     gemini_client = GeminiClient(new_psid, new_ts)
                     await gemini_client.init(auto_refresh=False)
 
-                    # 重建会话
-                    metadata = load_conversation(conversation_id)
-                    if metadata:
-                        chat = gemini_client.start_chat(metadata=metadata, model=model)
+                    # 重建会话 (尝试保留上下文)
+                    if conversation_id in active_chats:
+                        old_chat = active_chats[conversation_id]
+                        # 尝试用新的 client 恢复旧的 session
+                        chat = gemini_client.start_chat(metadata=old_chat.metadata, model=model)
                     else:
                         chat = gemini_client.start_chat(model=model)
 
                     active_chats[conversation_id] = chat
 
-                    # 重试发送
-                    debug_log("🔄 正在重试发送消息...", "REQUEST")
+                    # --- 尝试 2: 立即重试发送 ---
+                    debug_log("🔄 Cookie 刷新成功，正在重试请求...", "REQUEST")
                     if files:
                         response = await chat.send_message(user_message, files=files)
                     else:
                         response = await chat.send_message(user_message)
 
-                    debug_log("✅ 重试成功！", "SUCCESS")
-                    auth_failure_count = 0
+                    debug_log("✅ 重试成功，危机解除！", "SUCCESS")
+                    auth_failure_count = 0  # 成功后归零
 
                 except Exception as retry_e:
-                    # 重试失败 -> 计数 +1
-                    auth_failure_count += 1
-                    last_auth_failure_time = time.time()
-                    debug_log(f"❌ 重连失败 ({auth_failure_count}/3): {retry_e}", "ERROR")
-                    raise HTTPException(status_code=401, detail="Session expired and auto-recover failed.")
+                    # 重试依然失败 -> 计数器 +1
+                    if auth_failure_count < 100:
+                        auth_failure_count += 1
+
+                    last_auth_failure_time = current_time
+                    debug_log(f"❌ 重试失败 (当前失败次数: {auth_failure_count}): {retry_e}", "ERROR")
+
+                    raise HTTPException(
+                        status_code=401,
+                        detail=f"Session expired and recover failed. Failure count: {auth_failure_count}"
+                    )
             else:
+                # 其他未知错误 (如网络中断、参数错误等)，直接抛出，不触发熔断
+                debug_log(f"❌ 未知错误: {first_e}", "ERROR")
                 raise first_e
 
+        # =================================================================
         # --- 3. 处理响应 ---
+        # =================================================================
         elapsed_time = time.time() - start_time
         debug_log(f"收到响应 (耗时: {elapsed_time:.2f}s)", "RESPONSE")
 
@@ -439,7 +491,6 @@ async def chat_completions(request: ChatRequest, req: Request):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.post("/upload")
 async def upload_files(files: List[UploadFile] = File(...)):
