@@ -491,7 +491,14 @@ async def chat_completions(request: ChatRequest, req: Request):
             # 🔄 策略 B: 针对常规认证失效 (尝试救活)
             # -----------------------------------------------------
             # 排除 429 后的其他认证错误
-            is_auth_error = "401" in error_str or "403" in error_str or "cookie" in error_str or "unauthenticated" in error_str
+            is_auth_error = (
+                    "401" in error_str or
+                    "403" in error_str or
+                    "cookie" in error_str or
+                    "unauthenticated" in error_str or
+                    "invalid response" in error_str or  # 新增
+                    "failed to generate" in error_str  # 新增
+            )
 
             if is_auth_error:
                 debug_log(f"⚠️ 认证失效 ({first_e})，准备尝试刷新 Cookie...", "WARNING")
