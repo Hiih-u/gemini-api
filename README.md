@@ -32,6 +32,11 @@
 git clone https://github.com/Hiih-u/gemini-api.git
 cd gemini-api
 
+# windows 下部署单体
+python -m venv venv
+venv\Scripts\activate
+
+pip install -r requirements.txt
 ```
 
 ### 2. 初始化目录 (重要)
