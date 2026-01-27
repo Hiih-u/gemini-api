@@ -16,7 +16,9 @@ services:
 
 # === Worker 1 (端口: VNC 6901, API 8001) ===
   worker-1:
-    image: www527/gemini-kasm:3.0
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: gemini-kasm-1
     shm_size: 512m
     ports:
@@ -43,7 +45,9 @@ services:
 
 # === Worker 2 (端口: VNC 6902, API 8002 ===
   worker-2:
-    image: www527/gemini-kasm:3.0
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: gemini-kasm-2
     shm_size: 512m
     ports:
