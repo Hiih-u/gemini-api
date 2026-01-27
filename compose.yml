@@ -1,5 +1,4 @@
 services:
-# === Nginx 负载均衡器 (统一入口: 8000) ===
   nacos:
     image: nacos/nacos-server:v2.2.3
     container_name: nacos-standalone
