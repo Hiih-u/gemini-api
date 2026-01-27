@@ -362,7 +362,8 @@ async def chat_completions(request: ChatRequest, req: Request):
     global gemini_client, auth_failure_count, last_auth_failure_time
 
     try:
-        user_message = request.messages[-1].content
+        all_messages = request.messages
+        current_msg_content = all_messages[-1].content
         model = MODEL_MAP.get(request.model, Model.UNSPECIFIED)
         conversation_id = request.conversation_id
         files = request.files
@@ -370,7 +371,7 @@ async def chat_completions(request: ChatRequest, req: Request):
         debug_log("=" * 60, "REQUEST")
         debug_log(f"模型: {request.model}", "REQUEST")
         debug_log(f"对话ID: {conversation_id or '新对话'}", "REQUEST")
-        debug_log(f"消息: {user_message[:100]}{'...' if len(user_message) > 100 else ''}", "REQUEST")
+        debug_log(f"消息: {current_msg_content[:100]}{'...' if len(current_msg_content) > 100 else ''}", "REQUEST")
 
         # =================================================================
         # --- 0. 客户端检查 (新增 429 熔断与抖动逻辑) ---
@@ -430,15 +431,18 @@ async def chat_completions(request: ChatRequest, req: Request):
         # --- 1. 获取或创建对话 ---
         # =================================================================
         chat = None
+        is_recovered_session = False
         if conversation_id:
             if conversation_id in active_chats:
                 chat = active_chats[conversation_id]
+                is_recovered_session = True
                 debug_log("使用内存中的对话", "CHAT")
             else:
                 metadata = load_conversation(conversation_id)
                 if metadata:
                     chat = gemini_client.start_chat(metadata=metadata, model=model)
                     active_chats[conversation_id] = chat
+                    is_recovered_session = True
                     debug_log("从文件恢复对话", "CHAT")
 
         if chat is None:
@@ -449,6 +453,30 @@ async def chat_completions(request: ChatRequest, req: Request):
             debug_log(f"初始化新会话: {conversation_id}", "CHAT")
 
         # =================================================================
+        # --- 3. 构建最终 Prompt (上下文注入逻辑) ---
+        # =================================================================
+        final_prompt = current_msg_content
+
+        # 🔥 判定逻辑：
+        # 如果这不是一个本地恢复的会话 (是新开的)，并且请求里包含了历史记录 (>1条)
+        # 说明发生了【节点漂移】，我们需要手动把历史记忆注入进去！
+        if (not is_recovered_session) and (len(all_messages) > 1):
+            recent_messages = all_messages[-11:-1]
+            history_len = len(recent_messages)
+            debug_log(f"🔄 检测到节点漂移，正在注入最近 {history_len} 条历史记录...", "WARNING")
+
+            # 构建“剧本式”上下文
+            context_str = "Here is the conversation history so far for context:\n\n"
+            for msg in recent_messages:
+                role_label = "User" if msg.role == "user" else "Model"
+                context_str += f"[{role_label}]: {msg.content}\n"
+
+            context_str += "\n[System]: Please continue the conversation based on the history above.\n"
+            context_str += f"\n[User]: {current_msg_content}"
+
+            final_prompt = context_str
+
+        # =================================================================
         # --- 2. 发送消息 (核心逻辑) ---
         # =================================================================
         debug_log("正在发送消息到 Gemini...", "REQUEST")
@@ -457,9 +485,9 @@ async def chat_completions(request: ChatRequest, req: Request):
 
         try:
             if files:
-                response = await chat.send_message(user_message, files=files)
+                response = await chat.send_message(current_msg_content, files=files)
             else:
-                response = await chat.send_message(user_message)
+                response = await chat.send_message(final_prompt)
 
             # ✅ 成功！重置所有故障计数器
             if auth_failure_count > 0:
@@ -490,14 +518,16 @@ async def chat_completions(request: ChatRequest, req: Request):
             # -----------------------------------------------------
             # 🔄 策略 B: 针对常规认证失效 (尝试救活)
             # -----------------------------------------------------
-            # 排除 429 后的其他认证错误
             is_auth_error = (
                     "401" in error_str or
                     "403" in error_str or
                     "cookie" in error_str or
                     "unauthenticated" in error_str or
-                    "invalid response" in error_str or  # 新增
-                    "failed to generate" in error_str  # 新增
+                    "invalid response" in error_str or
+                    "failed to generate" in error_str or
+                    "server disconnected" in error_str or
+                    "remoteprotocolerror" in error_str or
+                    "connection closed" in error_str
             )
 
             if is_auth_error:
@@ -530,9 +560,9 @@ async def chat_completions(request: ChatRequest, req: Request):
                     # --- 尝试 2: 立即重试发送 ---
                     debug_log("🔄 Cookie 刷新成功，正在重试请求...", "REQUEST")
                     if files:
-                        response = await chat.send_message(user_message, files=files)
+                        response = await chat.send_message(current_msg_content, files=files)
                     else:
-                        response = await chat.send_message(user_message)
+                        response = await chat.send_message(final_prompt)
 
                     debug_log("✅ 重试成功，危机解除！", "SUCCESS")
                     auth_failure_count = 0  # 成功后归零
