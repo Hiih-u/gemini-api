@@ -9,31 +9,6 @@
 
 不同于传统的 Headless 脚本，本项目在一个完整的 **Kasm Ubuntu 桌面容器** 中运行。它允许你在容器内的 Chrome 浏览器中登录 Google 账号，后台程序 (`server.py`) 利用 `browser_cookie3` 直接读取浏览器 Cookie 进行 API 调用。
 
-### 核心架构图
-
-```mermaid
-graph TD
-    User[用户/客户端] -->|HTTP 请求| Gateway[API 网关 / Nacos]
-    
-    subgraph "Docker 容器群"
-        Gateway -.->|服务发现| Worker1
-        Gateway -.->|服务发现| Worker2
-        
-        subgraph "Worker 1 (Kasm)"
-            API1[FastAPI Server] -->|读取| Cookie1[Chrome Cookie]
-            Chrome1[Chrome 浏览器] -->|登录保活| Google[Google Servers]
-            API1 -->|注册| Nacos[Nacos Registry]
-        end
-        
-        subgraph "Worker 2 (Kasm)"
-            API2[FastAPI Server] -->|读取| Cookie2[Chrome Cookie]
-            Chrome2[Chrome 浏览器] -->|登录保活| Google
-            API2 -->|注册| Nacos
-        end
-    end
-
-```
-
 ## ✨ 核心特性
 
 * **🛡️ 物理级账号隔离**: 利用 `compose.yml` 编排多个 Worker 容器，每个容器拥有独立的浏览器 Profile 和数据目录，彻底规避关联封号风险。
