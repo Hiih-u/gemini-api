@@ -59,27 +59,6 @@ NORMAL_COOL_DOWN = 900        # 常规冷却：15分钟 (针对 401/Cookie失效
 CRITICAL_COOL_DOWN = 3600     # 严重冷却：1小时 (针对 429 限流)
 JITTER_SECONDS = 300
 
-EXTERNAL_IP = os.getenv("EXTERNAL_IP")
-EXTERNAL_PORT = int(os.getenv("EXTERNAL_PORT")) if os.getenv("EXTERNAL_PORT") else None
-
-def get_container_ip():
-    """获取容器在 Docker 网络中的真实 IP"""
-    try:
-        # 这种方式在 Docker 容器内非常有效
-        # 它尝试连接外部地址，从而获得自己对外的路由 IP
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(('8.8.8.8', 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
-    except Exception:
-        return "127.0.0.1"
-
-NACOS_SERVER_ADDR = os.getenv("NACOS_SERVER_ADDR") # 从 compose.yml 读取
-SERVICE_NAME = "gemini-service"
-NAMESPACE = "public"
-GROUP_NAME = "DEFAULT_GROUP"
-
 # 依赖检查
 try:
     import multipart
@@ -196,88 +175,9 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         debug_log(f"Gemini 初始化失败: {e}", "ERROR")
 
-    # ==========================================
-    # 2. Nacos 服务注册逻辑 (包含心跳维持) - [新增修改]
-    # ==========================================
-    nacos_client = None
-    heartbeat_thread = None
-    stop_heartbeat = threading.Event()  # 用于优雅停止心跳线程
-
-    # 计算注册 IP (优先使用外部 IP，否则使用容器 IP)
-    register_ip = EXTERNAL_IP if EXTERNAL_IP else get_container_ip()
-    register_port = EXTERNAL_PORT if EXTERNAL_PORT else PORT
-
-    if NACOS_SERVER_ADDR:
-        try:
-            debug_log(f"正在向 Nacos ({NACOS_SERVER_ADDR}) 注册服务...", "INFO")
-            nacos_client = nacos.NacosClient(NACOS_SERVER_ADDR, namespace=NAMESPACE)
-
-            # --- A. 注册服务 ---
-            nacos_client.add_naming_instance(
-                SERVICE_NAME,
-                register_ip,
-                register_port,
-                group_name=GROUP_NAME,
-                ephemeral=True,  # 临时实例
-                metadata={"version": "1.0", "env": "prod", "weight": "1.0"}
-            )
-            debug_log(f"✅ Nacos 注册成功: {SERVICE_NAME} @ {register_ip}:{register_port}", "SUCCESS")
-
-            # --- B. 定义心跳函数 (运行在后台线程) ---
-            def send_heartbeat():
-                debug_log("💓 心跳线程已启动", "INFO")
-                while not stop_heartbeat.is_set():
-                    try:
-                        nacos_client.send_heartbeat(
-                            SERVICE_NAME,
-                            register_ip,
-                            register_port,
-                            group_name=GROUP_NAME,
-                            ephemeral=True
-                        )
-                        # debug_log("💓 beat...", "DEBUG") # 调试用，太吵可注释
-                    except Exception as hb_e:
-                        debug_log(f"⚠️ 心跳发送异常: {hb_e}", "WARNING")
-
-                    # Nacos 建议心跳间隔 5 秒
-                    # 使用 wait 可以被 stop_event 立即唤醒，比 time.sleep 退出更快
-                    stop_heartbeat.wait(5)
-
-            # --- C. 启动心跳线程 ---
-            heartbeat_thread = threading.Thread(target=send_heartbeat, daemon=True)
-            heartbeat_thread.start()
-
-        except Exception as e:
-            debug_log(f"❌ Nacos 注册或启动心跳失败: {e}", "ERROR")
-
-    # ==========================================
-    # 3. 🚀 启动完成，服务开始运行 (Yield)
-    # ==========================================
     yield
 
-    # ==========================================
-    # 4. 服务关闭时的清理逻辑
-    # ==========================================
-
-    # A. 停止心跳线程
-    if heartbeat_thread:
-        debug_log("正在停止心跳线程...", "INFO")
-        stop_heartbeat.set()
-        heartbeat_thread.join(timeout=2)
-
-    # B. 从 Nacos 注销
-    if nacos_client:
-        try:
-            debug_log("正在从 Nacos 注销服务...", "INFO")
-            nacos_client.remove_naming_instance(
-                SERVICE_NAME,
-                register_ip,
-                register_port,
-                group_name=GROUP_NAME
-            )
-            debug_log("👋 Nacos 注销成功", "SUCCESS")
-        except Exception as e:
-            debug_log(f"❌ Nacos 注销失败: {e}", "ERROR")
+    debug_log("👋 服务正在关闭...", "INFO")
 
 
 app = FastAPI(lifespan=lifespan, title="Gemini Chat API", version="1.0.0")
