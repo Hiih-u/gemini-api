@@ -23,7 +23,6 @@ services:
       - GEMINI_WORKER_ID=gemini-worker-01
       - GEMINI_WEIGHT=1
     volumes:
-      # 挂载 Chrome 配置目录
       - ./profiles/worker1:/home/kasm-user/.config
       - ./data/worker1/conversations:/gemini/conversations
       - ./data/worker1/images:/gemini/stored_images
@@ -58,7 +57,6 @@ services:
       - GEMINI_WORKER_ID=gemini-worker-02
       - GEMINI_WEIGHT=1
     volumes:
-      # 挂载 Chrome 配置目录
       - ./profiles/worker2:/home/kasm-user/.config
       - ./data/worker2/conversations:/gemini/conversations
       - ./data/worker2/images:/gemini/stored_images
