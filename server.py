@@ -5,7 +5,6 @@ import time
 import uuid
 import secrets
 import socket
-import nacos
 import json
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -21,6 +20,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from gemini_webapi import GeminiClient
 from gemini_webapi.constants import Model
 from pydantic import BaseModel
+
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Float, text
+from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.dialects.postgresql import insert
 
 try:
     import browser_cookie3
@@ -59,15 +62,29 @@ NORMAL_COOL_DOWN = 900        # 常规冷却：15分钟 (针对 401/Cookie失效
 CRITICAL_COOL_DOWN = 3600     # 严重冷却：1小时 (针对 429 限流)
 JITTER_SECONDS = 300
 
-# 依赖检查
-try:
-    import multipart
-except ImportError:
-    print("=" * 60)
-    print("❌ 缺少依赖: python-multipart")
-    print("📦 请运行: pip install python-multipart")
-    print("=" * 60)
-    raise
+DB_HOST = os.getenv("DB_HOST", "127.0.0.1")
+DB_PORT = os.getenv("DB_PORT", "5432")
+DB_USER = os.getenv("DB_USER", "postgres")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "Hi8899")
+DB_NAME = os.getenv("DB_NAME", "gemini")
+
+DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+EXTERNAL_IP = os.getenv("EXTERNAL_IP")
+EXTERNAL_PORT = int(os.getenv("EXTERNAL_PORT")) if os.getenv("EXTERNAL_PORT") else None
+
+
+class GeminiServiceNode(Base):
+    __tablename__ = "gemini_service_nodes"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    node_url = Column(String, unique=True)
+    worker_id = Column(String)
+    status = Column(String) # HEALTHY, 429_LIMIT, ERROR
+    last_heartbeat = Column(DateTime, default=datetime.now)
 
 
 def debug_log(message: str, level: str = "INFO"):
@@ -81,6 +98,61 @@ def debug_log(message: str, level: str = "INFO"):
         }
         emoji = emoji_map.get(level, "•")
         print(f"[{timestamp}] {emoji} {message}")
+
+def get_container_ip():
+    """获取容器在 Docker 网络中的真实 IP"""
+    try:
+        # 这种方式在 Docker 容器内非常有效
+        # 它尝试连接外部地址，从而获得自己对外的路由 IP
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+def run_db_heartbeat(register_url, worker_id):
+    """
+    后台线程：每 5 秒更新一次数据库心跳
+    """
+    debug_log(f"💓 数据库心跳线程启动: {register_url}", "INFO")
+    while True:
+        try:
+            db = SessionLocal()
+
+            # 1. 确定当前状态
+            # 如果 auth_failure_count >= 100，说明处于 429 熔断中
+            current_status = "HEALTHY"
+            if auth_failure_count >= 100:
+                current_status = "429_LIMIT"
+            elif not gemini_client:
+                current_status = "INIT"
+
+            # 2. Upsert (插入或更新)
+            # 使用 Postgres 的 ON CONFLICT DO UPDATE
+            stmt = insert(GeminiServiceNode).values(
+                node_url=register_url,
+                worker_id=worker_id,
+                status=current_status,
+                last_heartbeat=datetime.now()
+            ).on_conflict_do_update(
+                index_elements=['node_url'],
+                set_={
+                    "status": current_status,
+                    "last_heartbeat": datetime.now(),
+                    "worker_id": worker_id
+                }
+            )
+
+            db.execute(stmt)
+            db.commit()
+            db.close()
+
+        except Exception as e:
+            debug_log(f"⚠️ 心跳写入失败: {e}", "WARNING")
+
+        time.sleep(5)
 
 
 def get_auto_cookies(force_refresh: bool = False):
@@ -174,6 +246,22 @@ async def lifespan(app: FastAPI):
             debug_log("⚠️ 未获取到 Cookie，将在首次请求时尝试获取", "WARNING")
     except Exception as e:
         debug_log(f"Gemini 初始化失败: {e}", "ERROR")
+
+        # === 新增：启动数据库心跳 ===
+
+    # 1. 计算本机对外地址
+    # 注意：这里需要确保 async-chat 能通过这个 URL 访问到你
+    my_ip = EXTERNAL_IP if EXTERNAL_IP else get_container_ip()
+    my_port = EXTERNAL_PORT if EXTERNAL_PORT else PORT
+    my_url = f"http://{my_ip}:{my_port}"
+
+    # 2. 启动线程
+    hb_thread = threading.Thread(
+        target=run_db_heartbeat,
+        args=(my_url, os.getenv("GEMINI_WORKER_ID", "unknown")),
+        daemon=True
+    )
+    hb_thread.start()
 
     yield
 
