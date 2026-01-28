@@ -126,7 +126,7 @@ def run_db_heartbeat(register_url, worker_id):
 
             # 1. 确定当前状态
             # 如果 auth_failure_count >= 100，说明处于 429 熔断中
-            current_status = "HEALTHY"
+            current_status = _get_current_logic_status()
             if auth_failure_count >= 100:
                 current_status = "429_LIMIT"
             elif not gemini_client:
@@ -164,6 +164,27 @@ def run_db_heartbeat(register_url, worker_id):
             debug_log(f"⚠️ 心跳写入失败: {e}", "WARNING")
 
         time.sleep(5)
+
+
+def _get_current_logic_status() -> str:
+    """
+    [核心逻辑] 根据当前内存指标判定节点对外状态
+    优先级：429限流 > 正在工作 > 初始化中 > 健康
+    """
+    global active_task_counter, auth_failure_count, gemini_client
+
+    if auth_failure_count >= 100:
+        return "429_LIMIT"
+    if active_task_counter > 0:
+        return "BUSY"
+    if not gemini_client:
+        return "INIT"
+    return "HEALTHY"
+
+def sync_db_status():
+    """主动将当前逻辑状态同步到数据库"""
+    new_status = _get_current_logic_status()
+    update_node_status(new_status)
 
 
 def get_auto_cookies(force_refresh: bool = False):
@@ -369,13 +390,42 @@ async def root():
     else:
         return "Frontend not found"
 
+active_task_counter = 0
+
+
+def update_node_status(status_str: str):
+    """
+    立即更新数据库中的节点状态，供网关发现
+    """
+    try:
+        db = SessionLocal()
+        # 构造当前节点的唯一标识 URL
+        my_ip = EXTERNAL_IP if EXTERNAL_IP else get_container_ip()
+        my_port = EXTERNAL_PORT if EXTERNAL_PORT else PORT
+        my_url = f"http://{my_ip}:{my_port}"
+
+        db.query(GeminiServiceNode).filter(
+            GeminiServiceNode.node_url == my_url
+        ).update({
+            "status": status_str,
+            "last_heartbeat": datetime.now()
+        })
+        db.commit()
+        db.close()
+        debug_log(f"📡 节点状态同步: {status_str}", "INFO")
+    except Exception as e:
+        debug_log(f"⚠️ 状态同步失败: {e}", "WARNING")
+
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: ChatRequest, req: Request):
     """
     OpenAI 兼容接口 (支持 Cookie 自动重连 + 429必杀熔断 + 随机抖动 + 文件缓存)
     """
-    global gemini_client, auth_failure_count, last_auth_failure_time
+    global gemini_client, auth_failure_count, last_auth_failure_time, active_task_counter
+
+    active_task_counter += 1
+    sync_db_status()
 
     try:
         all_messages = request.messages
@@ -644,6 +694,10 @@ async def chat_completions(request: ChatRequest, req: Request):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        # --- 2. 任务结束：无论成功或报错，都减少计数 ---
+        active_task_counter -= 1
+        sync_db_status()
 
 @app.post("/upload")
 async def upload_files(files: List[UploadFile] = File(...)):
