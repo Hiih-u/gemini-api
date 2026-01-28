@@ -593,7 +593,11 @@ async def chat_completions(request: ChatRequest, req: Request):
                     "failed to generate" in error_str or
                     "server disconnected" in error_str or
                     "remoteprotocolerror" in error_str or
-                    "connection closed" in error_str
+                    "connection closed" in error_str or
+                    "connecterror" in error_str or
+                    "connection attempts failed" in error_str or
+                    "timed out" in error_str or
+                    "network is unreachable" in error_str
             )
 
             if is_auth_error:
