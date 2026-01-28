@@ -82,18 +82,9 @@ docker compose up -d
 
 ### 第三步：启动 API 服务
 
-登录完成后，你需要启动 Python 后端服务。你有两种方式：
+登录完成后，你需要启动 Python 后端服务。：
 
-**方式 A：在 Kasm 桌面终端启动 (推荐)**
-在 Kasm 桌面上打开终端 (Terminal)，执行：
-
-```bash
-# 启动服务并挂起
-python3.10 server.py
-
-```
-
-**方式 B：通过 Docker Exec 启动**
+**方式 A：通过 Docker Exec 启动**
 在宿主机终端执行：
 
 ```bash
