@@ -8,12 +8,6 @@ for CONTAINER in $CONTAINERS; do
     if [ "$(docker ps -q -f name=$CONTAINER)" ]; then
         echo "---------------------------------------"
         echo "正在重启: $CONTAINER"
-
-        # 修改点说明：
-        # 1. pkill -f server.py : 尝试杀死旧的 server.py 进程
-        # 2. || true : 即使没有旧进程（pkill 报错）也不要停止脚本，继续执行后面的启动
-        # 3. sleep 2 : 给一点时间让端口释放
-
         docker exec -d $CONTAINER bash -c "cd /gemini && (pkill -f server.py || true) && sleep 2 && eval \$(dbus-launch --sh-syntax) && nohup python3.10 server.py > /proc/1/fd/1 2>&1 &"
 
         if [ $? -eq 0 ]; then
