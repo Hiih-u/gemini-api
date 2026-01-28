@@ -20,6 +20,8 @@ services:
       - DB_USER=postgres
       - DB_PASSWORD=Hi8899
       - DB_NAME=gemini
+      - GEMINI_WORKER_ID=gemini-worker-01
+      - GEMINI_WEIGHT=1
     volumes:
       # 挂载 Chrome 配置目录
       - ./profiles/worker1:/home/kasm-user/.config
@@ -53,6 +55,8 @@ services:
       - DB_USER=postgres
       - DB_PASSWORD=Hi8899
       - DB_NAME=gemini
+      - GEMINI_WORKER_ID=gemini-worker-02
+      - GEMINI_WEIGHT=1
     volumes:
       # 挂载 Chrome 配置目录
       - ./profiles/worker2:/home/kasm-user/.config

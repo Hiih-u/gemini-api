@@ -77,14 +77,15 @@ Base = declarative_base()
 EXTERNAL_IP = os.getenv("EXTERNAL_IP")
 EXTERNAL_PORT = int(os.getenv("EXTERNAL_PORT")) if os.getenv("EXTERNAL_PORT") else None
 
-
 class GeminiServiceNode(Base):
     __tablename__ = "gemini_service_nodes"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    node_url = Column(String, unique=True)
+
+    node_url = Column(String, primary_key=True, index=True)
     worker_id = Column(String)
     status = Column(String) # HEALTHY, 429_LIMIT, ERROR
+    weight = Column(Float, default=1.0)  # 默认权重 1.0
     last_heartbeat = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=datetime.now)
 
 
 def debug_log(message: str, level: str = "INFO"):
@@ -116,6 +117,8 @@ def run_db_heartbeat(register_url, worker_id):
     """
     后台线程：每 5 秒更新一次数据库心跳
     """
+    node_weight = float(os.getenv("GEMINI_WEIGHT", "1.0"))
+
     debug_log(f"💓 数据库心跳线程启动: {register_url}", "INFO")
     while True:
         try:
@@ -129,20 +132,28 @@ def run_db_heartbeat(register_url, worker_id):
             elif not gemini_client:
                 current_status = "INIT"
 
-            # 2. Upsert (插入或更新)
-            # 使用 Postgres 的 ON CONFLICT DO UPDATE
-            stmt = insert(GeminiServiceNode).values(
-                node_url=register_url,
-                worker_id=worker_id,
-                status=current_status,
-                last_heartbeat=datetime.now()
-            ).on_conflict_do_update(
+            # 2. Upsert 逻辑 (包含权重)
+            # 插入时的值
+            values = {
+                "node_url": register_url,
+                "worker_id": worker_id,
+                "status": current_status,
+                "weight": node_weight,  # <--- 插入权重
+                "last_heartbeat": datetime.now(),
+                "created_at": datetime.now()  # <--- 插入创建时间
+            }
+
+            # 更新时的值 (注意：不要更新 created_at)
+            update_dict = {
+                "status": current_status,
+                "weight": node_weight,  # <--- 支持动态更新权重
+                "last_heartbeat": datetime.now(),
+                "worker_id": worker_id
+            }
+
+            stmt = insert(GeminiServiceNode).values(values).on_conflict_do_update(
                 index_elements=['node_url'],
-                set_={
-                    "status": current_status,
-                    "last_heartbeat": datetime.now(),
-                    "worker_id": worker_id
-                }
+                set_=update_dict
             )
 
             db.execute(stmt)
@@ -224,6 +235,8 @@ def get_auto_cookies(force_refresh: bool = False):
 async def lifespan(app: FastAPI):
     global gemini_client, auth_failure_count
 
+    init_success = False
+
     # ==========================================
     # 1. 初始化 Gemini 客户端 (Cookie 逻辑) - 保持原样
     # ==========================================
@@ -242,6 +255,8 @@ async def lifespan(app: FastAPI):
             gemini_client = GeminiClient(secure_1psid, secure_1psidts)
             await gemini_client.init(auto_refresh=False)
             debug_log("✅ Gemini 客户端初始化成功", "SUCCESS")
+
+            init_success = True
         else:
             debug_log("⚠️ 未获取到 Cookie，将在首次请求时尝试获取", "WARNING")
     except Exception as e:
@@ -256,15 +271,28 @@ async def lifespan(app: FastAPI):
     my_url = f"http://{my_ip}:{my_port}"
 
     # 2. 启动线程
-    hb_thread = threading.Thread(
-        target=run_db_heartbeat,
-        args=(my_url, os.getenv("GEMINI_WORKER_ID", "unknown")),
-        daemon=True
-    )
-    hb_thread.start()
+    if init_success:
+        # 启动心跳线程
+        hb_thread = threading.Thread(
+            target=run_db_heartbeat,
+            args=(my_url, os.getenv("GEMINI_WORKER_ID", "unknown")),
+            daemon=True
+        )
+        hb_thread.start()
+        debug_log(f"💓 数据库心跳已启动: {my_url}", "SUCCESS")
+    else:
+        debug_log("⛔ 初始化失败，跳过数据库注册 (网关将无法发现此节点)", "WARNING")
 
     yield
 
+    if init_success:
+        try:
+            db = SessionLocal()
+            db.query(GeminiServiceNode).filter(GeminiServiceNode.node_url == my_url).update({"status": "OFFLINE"})
+            db.commit()
+            db.close()
+        except Exception:
+            pass
     debug_log("👋 服务正在关闭...", "INFO")
 
 
