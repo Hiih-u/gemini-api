@@ -22,6 +22,7 @@ services:
       - DB_NAME=gemini
       - GEMINI_WORKER_ID=gemini-worker-01
       - GEMINI_WEIGHT=1
+      - TZ=Asia/Shanghai
     volumes:
       - ./profiles/worker1:/home/kasm-user/.config
       - ./data/worker1/conversations:/gemini/conversations
@@ -56,6 +57,7 @@ services:
       - DB_NAME=gemini
       - GEMINI_WORKER_ID=gemini-worker-02
       - GEMINI_WEIGHT=1
+      - TZ=Asia/Shanghai
     volumes:
       - ./profiles/worker2:/home/kasm-user/.config
       - ./data/worker2/conversations:/gemini/conversations
