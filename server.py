@@ -85,6 +85,7 @@ class GeminiServiceNode(Base):
     status = Column(String) # HEALTHY, 429_LIMIT, ERROR
     weight = Column(Float, default=1.0)  # 默认权重 1.0
     last_heartbeat = Column(DateTime, default=datetime.now)
+    current_tasks = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.now)
 
 
@@ -148,6 +149,7 @@ def run_db_heartbeat(register_url, worker_id):
                 "status": current_status,
                 "weight": node_weight,  # <--- 支持动态更新权重
                 "last_heartbeat": datetime.now(),
+                "current_tasks": active_task_counter,
                 "worker_id": worker_id
             }
 
@@ -408,7 +410,8 @@ def update_node_status(status_str: str):
             GeminiServiceNode.node_url == my_url
         ).update({
             "status": status_str,
-            "last_heartbeat": datetime.now()
+            "last_heartbeat": datetime.now(),
+            "current_tasks": active_task_counter
         })
         db.commit()
         db.close()
