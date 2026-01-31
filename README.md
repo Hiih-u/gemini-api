@@ -1,7 +1,9 @@
 # 🌌 Gemini API (Kasm Enterprise Edition)
 
-> 基于 Kasm Workspaces 容器化技术的 Gemini API 代理网关。
-> 通过真实的桌面环境运行 Chrome 浏览器，实现 Cookie 自动保活、多账号负载均衡与 Nacos 服务发现。
+> **基于 Kasm Workspaces 容器化技术的 Gemini API 高可用代理节点。**
+> 通过在 Docker 容器内运行真实的桌面环境和 Chrome 浏览器，实现 Cookie 自动抓取、会话保活、429 熔断保护以及基于数据库的负载均衡注册。
+
+---
 
 ## 📖 项目简介
 
@@ -15,99 +17,99 @@
 * **🍪 智能 Cookie 管理**:
     * **自动热加载**: 启动时自动抓取 Chrome Cookie，并缓存至 `cookie_cache.json`。
     * **认证熔断 & 自愈**: 遇到 401/403 自动尝试刷新 Cookie；遇到 **429 (严重限流)** 自动进入 1 小时冷却模式，保护账号安全。
-* **📡 数据库服务发现**: 利用 **PostgreSQL** 进行轻量级心跳注册 (`gemini_service_nodes` 表)，配合网关实现动态负载均衡。
+* **📡 数据库服务发现**: 直接利用 **PostgreSQL** 进行轻量级心跳注册 (`gemini_service_nodes` 表)，配合网关实现动态负载均衡。
 * **🚀 OpenAI 兼容接口**: 提供标准的 `/v1/chat/completions`，无缝对接 NextChat、OneAPI 等前端。
 * **🖼️ 多模态支持**: 支持图片上传与分析，生成的图片自动保存并提供静态访问链接。
 
----
 
-## 🛠️ 快速部署
+## 🛠️ 部署指南
 
-### 1. 环境准备
+### 1. 环境要求
+* Docker & Docker Compose
+* PostgreSQL 数据库 (用于服务注册和心跳)
 
-确保已安装 Docker 和 Docker Compose。
+### 2. 克隆与初始化
+由于 Kasm 容器内使用非 Root 用户 (UID 1000)，必须先执行脚本初始化挂载目录的权限。
 
 ```bash
-git clone https://github.com/Hiih-u/gemini-api.git
+# 1. 克隆项目
+git clone [https://github.com/Hiih-u/gemini-api.git](https://github.com/Hiih-u/gemini-api.git)
 cd gemini-api
 
-# windows 下部署单体
-python -m venv venv
-venv\Scripts\activate
-
-pip install -r requirements.txt
-```
-
-### 2. 初始化目录 (重要)
-
-由于容器内运行非 Root 用户 (kasm-user)，必须先运行初始化脚本创建挂载目录并修正权限。
-
-```bash
+# 2. 赋予脚本执行权限并运行
 chmod +x init.sh
 ./init.sh
 
 ```
 
-*该脚本会自动读取 `compose.yml` 中的 worker 数量，创建对应的 `data/workerX` 和 `profiles/workerX` 目录。*
+> **注意**: `init.sh` 会自动读取 `compose.yml` 中的 worker 数量，创建对应的 `data/workerX` 目录并修正权限。
 
-### 3. 启动服务
+### 3. 配置环境变量
+
+修改 `compose.yml` 或创建 `.env` 文件，确保数据库连接正确：
+
+```yaml
+environment:
+  - DB_HOST=192.168.202.155  # 你的 PostgreSQL 地址
+  - DB_PORT=61020
+  - DB_USER=postgres
+  - DB_PASSWORD=YourPassword
+  - EXTERNAL_IP=192.168.202.155 # 当前宿主机 IP (供网关访问)
+
+```
+
+### 4. 启动服务
 
 ```bash
 docker compose up -d
 
 ```
 
-*默认启动 Nacos (8848) 和 2 个 Worker 节点 (8001, 8002)。*
-
 ---
 
-## 🔐 账号登录与服务启动 (关键步骤)
+## 🔐 账号登录 (关键步骤)
 
-启动容器后，你需要**手动**进入每个 Worker 的桌面环境登录 Google 账号。
+服务启动后，API 尚不可用，需要手动登录 Google 账号以生成 Cookie。
 
-### 第一步：访问 Kasm 桌面
+### 步骤 A: 访问 Kasm 桌面
 
-在浏览器访问 Worker 的 VNC 地址：
+在浏览器访问 Worker 的 VNC 地址 (忽略 HTTPS 证书警告)：
 
-* **Worker 1**: `https://<你的IP>:6901`
-* **Worker 2**: `https://<你的IP>:6902`
-* **默认凭证**: 用户名 `kasm_user` / 密码 `password`
+* **Worker 1**: `https://<宿主机IP>:6901`
+* **Worker 2**: `https://<宿主机IP>:6902`
+* **默认账号**: `kasm_user`
+* **默认密码**: `password` (可在 compose.yml 中修改)
 
-### 第二步：登录 Google
+### 步骤 B: 登录 Google
 
-1. 在 Kasm 桌面中，打开 **Chrome** 浏览器。
+1. 在 Kasm 桌面内，点击左下角菜单打开 **Chrome** 浏览器。
 2. 访问 `google.com` 并登录你的 Google 账号。
-3. 确保能正常访问 Gemini 网页版。
+3. **强烈建议**: 访问一次 `gemini.google.com` 确保通过了欢迎页且能正常对话。
 
-### 第三步：启动 API 服务
+### 步骤 C: 激活 API
 
-登录完成后，你需要启动 Python 后端服务。：
-
-**方式 A：通过 Docker Exec 启动**
-在宿主机终端执行：
+登录完成后，以下命令来激活后端服务：
 
 ```bash
-# 进入容器
-docker exec -it gemini-kasm-1 bash
 
-# 加载环境变量并启动
+docker exec -it gemini-kasm-1 bash
+# 在容器内:
 eval $(dbus-launch --sh-syntax)
-python3.10 server.py > /proc/1/fd/1 2>&1
+python3.10 server.py
 
 ```
 
-*看到 `✅ Gemini 客户端初始化成功` 和 `✅ Nacos 注册成功` 即表示服务就绪。*
+*当看到日志输出 `✅ Gemini 客户端初始化成功` 和 `💓 数据库心跳已启动` 时，服务即就绪。*
 
 ---
 
 ## 🔌 API 接口文档
 
-### 对话补全 (Chat Completions)
+### 1. 对话补全 (Chat Completions)
 
-完全兼容 OpenAI 格式。
+兼容 OpenAI 格式，支持流式和非流式（本项目默认非流式）。
 
-* **URL**: `http://localhost:8001/v1/chat/completions`
-* **Method**: `POST`
+* **Endpoint**: `POST /v1/chat/completions`
 
 ```bash
 curl http://localhost:8001/v1/chat/completions \
@@ -115,60 +117,79 @@ curl http://localhost:8001/v1/chat/completions \
   -d '{
     "model": "gemini-2.5-flash",
     "messages": [
-      {"role": "user", "content": "你好，请介绍一下你自己"}
-    ],
-    "stream": false
+      {"role": "user", "content": "分析这张图片，并写一首诗。"}
+    ]
   }'
 
 ```
 
-### 文件上传 (Upload)
+### 2. 文件/图片上传
 
-支持上传图片或文档用于多模态分析。
+* **Endpoint**: `POST /upload`
+* **Body**: `multipart/form-data`, key=`files`
 
-* **URL**: `http://localhost:8001/upload`
-* **Method**: `POST`
-* **Body**: `multipart/form-data` (字段名: `files`)
+### 3. 健康检查 & 状态
+
+* **Endpoint**: `GET /health`
+* **Response**: 返回当前活跃会话数和存储的图片数量。
 
 ---
 
-## ⚙️ 配置说明
-
-修改 `compose.yml` 或 `.env` 调整配置。
+## ⚙️ 详细配置
 
 | 环境变量 | 说明 | 默认值 |
 | --- | --- | --- |
-| `NACOS_SERVER_ADDR` | Nacos 注册中心地址 | `nacos:8848` |
-| `EXTERNAL_IP` | 容器对外暴露的 IP (注册到 Nacos 用) | `192.168.202.155` |
-| `EXTERNAL_PORT` | 容器对外暴露的端口 | `8001` / `8002` |
-| `VNC_PW` | Kasm 桌面访问密码 | `password` |
-| `DEBUG` | 开启调试日志 | `true` |
+| `DB_HOST` | **[必填]** PostgreSQL 主机地址 | `127.0.0.1` |
+| `DB_PORT` | PostgreSQL 端口 | `5432` |
+| `EXTERNAL_IP` | **[重要]** 容器宿主机的局域网 IP (用于注册到数据库供网关调用) | 自动探测 |
+| `EXTERNAL_PORT` | 容器映射出来的 API 端口 | `8001` |
+| `GEMINI_WORKER_ID` | 当前节点的唯一标识 ID | `gemini-worker-01` |
+| `GEMINI_WEIGHT` | 负载均衡权重 | `1.0` |
+| `VNC_PW` | Kasm VNC 桌面密码 | `password` |
+| `DEBUG` | 是否开启详细调试日志 | `true` |
+
+---
 
 ## 📂 目录结构
 
 ```text
 gemini-api/
-├── compose.yml             # 多容器编排 (Nacos + Workers)
-├── init.sh                 # 初始化脚本 (权限修正)
-├── server.py               # 核心 FastAPI 服务端
-├── Dockerfile              # Kasm 镜像构建文件
-├── data/                   # [自动生成] 数据挂载目录
+├── compose.yml             # 多容器编排
+├── init.sh                 # 权限初始化脚本
+├── server.py               # 核心服务 (FastAPI + SQLAlchemy)
+├── Dockerfile              # Kasm 定制镜像
+├── data/                   # [自动生成] 数据持久化目录
 │   ├── worker1/
-│   │   ├── cookie_cache.json  # 缓存的 Cookie
-│   │   └── stored_images/     # 生成的图片
-│   └── worker2/
-├── profiles/               # [自动生成] Chrome 配置文件挂载
-└── requirements_linux.txt  # Python 依赖
+│   │   ├── cookie_cache.json  # 缓存的 Cookie (核心凭证)
+│   │   ├── conversations/     # 对话历史 JSON
+│   │   └── images/            # 生成的图片
+│   └── worker2/ ...
+└── profiles/               # [自动生成] Chrome 配置文件挂载
 
 ```
 
-## ❓ 常见问题
-
-**Q: 为什么日志提示 `Browser cookie3 not found`？**
-A: 请确保你在 Kasm 容器内使用的是 `python3.10` 运行服务。系统默认 Python 版本可能较低，而我们在 Dockerfile 中专门安装了 Python 3.10 环境。
-
-**Q: Nacos 注册的 IP 是 127.0.0.1？**
-A: 请检查 `compose.yml` 中的 `EXTERNAL_IP` 变量。服务会自动读取该变量作为注册 IP，如果未设置，它会尝试探测 Docker 内部 IP。
+## ❓ 常见问题 (FAQ)
 
 **Q: 遇到 `429 Resource Exhausted` 怎么办？**
-A: 系统会自动触发熔断机制，并在控制台打印警告 `🔥 Google 严重流控 (429) 生效中`。服务会强制休眠 1 小时以保护账号安全。建议轮询切换到另一个 Worker 节点。
+A: 这是 Google 的严重限流。系统会自动触发 **1小时熔断保护**，控制台会打印 `🔥 Google 严重流控 (429) 生效中`。此时该节点会自动在数据库中标记为不可用，网关会将流量转发到其他 Worker。
+
+**Q: 为什么日志提示 `Browser cookie3 not found`？**
+A: 请确保使用 `init.sh` 启动，并且不要随意更改 `Dockerfile` 中的 Python 版本。我们依赖 Kasm 环境中的特定 Chrome 配置。
+
+**Q: 如何更换 Google 账号？**
+A:
+
+1. 进入 Kasm 桌面 (https://IP:6901)。
+2. 在 Chrome 中退出当前 Google 账号并登录新账号。
+3. 删除 `data/workerX/cookie_cache.json` 文件。
+4. 重启容器：`docker restart gemini-kasm-X`。
+
+---
+
+## ⚖️ 免责声明
+
+本项目仅供技术研究与学术交流使用。用户应自行承担使用本工具产生的风险，并遵守 Google 服务条款。请勿用于任何商业用途或大规模滥用 API。
+
+```
+
+```
