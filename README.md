@@ -33,7 +33,7 @@
 
 ```bash
 # 1. 克隆项目
-git clone [https://github.com/Hiih-u/gemini-api.git](https://github.com/Hiih-u/gemini-api.git)
+git clone https://github.com/Hiih-u/gemini-api.git
 cd gemini-api
 
 # 2. 赋予脚本执行权限并运行
