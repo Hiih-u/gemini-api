@@ -5,22 +5,21 @@
 
 ## 📖 项目简介
 
-本项目旨在解决 Gemini Web 接口调用中的 **Cookie 获取难**、**风控严格 (429/403)** 以及 **会话持久化** 问题。
+本项目专为解决 Gemini Web 接口调用中的 **Cookie 获取难**、**风控严格 (429/403)** 以及 **会话持久化** 问题而设计。
 
-不同于传统的 Headless 脚本，本项目在一个完整的 **Kasm Ubuntu 桌面容器** 中运行。它允许你在容器内的 Chrome 浏览器中登录 Google 账号，后台程序 (`server.py`) 利用 `browser_cookie3` 直接读取浏览器 Cookie 进行 API 调用。
+核心原理利用 **Kasm Ubuntu 桌面容器** 运行一个完整的 GUI 环境。用户通过 VNC 登录 Google 账号后，后台服务 (`server.py`) 会自动通过 `browser_cookie3` 读取 Chrome 浏览器的凭证，并提供兼容 OpenAI 格式的 API 接口。
 
-## ✨ 核心特性
+### ✨ 核心特性
 
-* **🛡️ 物理级账号隔离**: 利用 `compose.yml` 编排多个 Worker 容器，每个容器拥有独立的浏览器 Profile 和数据目录，彻底规避关联封号风险。
-* **🍪 自动化 Cookie 管理**:
-* **自动抓取**: 启动时自动从 Chrome 数据库读取 `__Secure-1PSID`。
-* **智能缓存**: 将有效 Cookie 缓存至 `cookie_cache.json`，重启服务无需重新读取浏览器。
-* **认证熔断**: 遇到 401/403 错误时尝试自动刷新 Cookie，遇到 429 严重限流自动进入冷却模式。
+* **🛡️ 物理级账号隔离**: 通过 Docker Compose 编排多个 Worker，每个容器拥有独立的 `data` 和 `profiles` 挂载，彻底规避关联封号风险。
+* **🍪 智能 Cookie 管理**:
+    * **自动热加载**: 启动时自动抓取 Chrome Cookie，并缓存至 `cookie_cache.json`。
+    * **认证熔断 & 自愈**: 遇到 401/403 自动尝试刷新 Cookie；遇到 **429 (严重限流)** 自动进入 1 小时冷却模式，保护账号安全。
+* **📡 数据库服务发现**: 利用 **PostgreSQL** 进行轻量级心跳注册 (`gemini_service_nodes` 表)，配合网关实现动态负载均衡。
+* **🚀 OpenAI 兼容接口**: 提供标准的 `/v1/chat/completions`，无缝对接 NextChat、OneAPI 等前端。
+* **🖼️ 多模态支持**: 支持图片上传与分析，生成的图片自动保存并提供静态访问链接。
 
-
-* **☁️ Nacos 服务发现**: 启动后自动将服务注册到 Nacos，支持心跳维持，方便网关进行动态路由和负载均衡。
-* **🚀 OpenAI 兼容**: 提供标准的 `/v1/chat/completions` 接口，可直接接入 NextChat、OneAPI 等客户端。
-* **⚡ 自动化部署**: 提供 `init.sh` 脚本，自动处理 Docker 挂载目录的权限问题 (UID/GID 1000)。
+---
 
 ## 🛠️ 快速部署
 
